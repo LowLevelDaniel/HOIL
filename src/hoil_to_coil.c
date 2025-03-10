@@ -291,7 +291,6 @@ uint16_t resolve_identifier(converter_state_t *state, const char *id_str, symbol
       }
       return symbol.address;
     } else {
-      fprintf(stderr, "Symbol not found: %s\n", symbol_name);
       return 0;
     }
   } else if (isdigit(id_str[0])) {
@@ -307,7 +306,6 @@ uint16_t resolve_identifier(converter_state_t *state, const char *id_str, symbol
       }
       return symbol.address;
     } else {
-      fprintf(stderr, "Symbol not found: %s\n", id_str);
       return 0;
     }
   }
@@ -414,16 +412,17 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     // Resolve source symbol
     uint16_t src_addr = resolve_identifier(state, src_symbol, NULL);
     
-    // Allocate memory for the destination symbol
-    uint16_t dest_addr = state->next_address;
-    if (add_symbol(state, dest_symbol, dest_addr, type) != 0) {
-      return -1;
+    // Allocate memory for the destination symbol if it doesn't exist
+    uint16_t dest_addr = resolve_identifier(state, dest_symbol, NULL);
+    if (dest_addr == 0) {
+      dest_addr = state->next_address;
+      if (add_symbol(state, dest_symbol, dest_addr, type) != 0) {
+        return -1;
+      }
     }
-    
-    // Generate ALLOC_MEM instruction
+    // Generate ALLOC_MEM instruction  
     init_instruction(&instruction, OP_ALLOC_MEM, type, dest_addr, src_addr);
     write_instruction(state, &instruction);
-    
   } else if (strcmp(tokens[1], "LOAD") == 0) {
     mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
