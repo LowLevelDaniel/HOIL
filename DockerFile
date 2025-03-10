@@ -1,0 +1,31 @@
+FROM ubuntu:22.04
+
+# Set up build environment
+RUN apt-get update && apt-get install -y \
+    gcc \
+    ninja-build \
+    python3 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install meson
+RUN pip3 install meson
+
+# Create working directory
+WORKDIR /app
+
+# Copy source code
+COPY . .
+
+# Build the project
+RUN meson setup builddir && \
+    meson compile -C builddir
+
+# Set up example directory
+RUN mkdir -p /app/examples
+
+# Copy example files
+COPY test/example.hoil /app/examples/
+
+# Set entry point
+ENTRYPOINT ["/bin/bash"]

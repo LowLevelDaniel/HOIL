@@ -1,0 +1,20 @@
+; Enhanced HOIL example with more operations
+
+; Define base values
+VAL DEFV dint, 0, id10    ; Define value 10 at ID 0
+VAL DEFV dint, 1, id5     ; Define value 5 at ID 1
+
+; Mathematical operations
+MATH ADD 2, 0, 1          ; Add: 10 + 5 = 15 at ID 2
+MATH SUB 3, 0, 1          ; Subtract: 10 - 5 = 5 at ID 3
+MATH MUL 4, 0, 1          ; Multiply: 10 * 5 = 50 at ID 4
+MATH DIV 5, 0, 1          ; Divide: 10 / 5 = 2 at ID 5
+
+; Print the results
+CF SYSC 1, 1, &2, SIZE(2) ; Print result of addition
+CF SYSC 1, 1, &3, SIZE(3) ; Print result of subtraction
+CF SYSC 1, 1, &4, SIZE(4) ; Print result of multiplication
+CF SYSC 1, 1, &5, SIZE(5) ; Print result of division
+
+; Exit
+CF SYSC 60, 0

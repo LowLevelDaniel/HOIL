@@ -1,0 +1,8 @@
+; COIL code generated from HOIL
+; Original HOIL file: example.hoil
+
+0001 0008 0000 000A  ; ALLOC_IMM: Allocate memory at address 0 with value 10
+0002 0008 0001 0000  ; ALLOC_MEM: Allocate memory at address 1 with value from address 0
+0101 0002 0000 0001  ; ADD: Add values from addresses 0 and 1, store in address 2
+0201 0001 0001 0002 0008  ; SYSCALL: System call 1 (write to stdout)
+0201 003C 0000  ; SYSCALL: System call 60 (exit)
