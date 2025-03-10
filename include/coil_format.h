@@ -1,12 +1,17 @@
 /**
 * @file coil_format.h
-* @brief Definition of the enhanced COIL instruction format
+* @brief Definition of the COIL instruction format
+*
+* This file contains definitions specific to the COIL (Computer Oriented Intermediate 
+* Language) format, which serves as a target for HOIL compilation and as input for 
+* the COIL VM. This format is intended to be stable and usable by other implementations.
 */
 
 #ifndef COIL_FORMAT_H
 #define COIL_FORMAT_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /**
 * @brief Instruction marker types
@@ -63,7 +68,11 @@ typedef enum {
   
   /* System operations: 0x05xx */
   OP_SYSCALL   = 0x0501,  /**< System call */
-  OP_EXIT      = 0x0502   /**< Exit program */
+  OP_EXIT      = 0x0502,  /**< Exit program */
+
+  /* Special codes */
+  OP_LABEL_DEF = 0xFFFE,  /**< Label definition (not an actual instruction) */
+  OP_ARG_DATA  = 0xFFFF   /**< Argument data (used with other instructions) */
 } op_code_t;
 
 /**

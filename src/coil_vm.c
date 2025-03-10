@@ -1,6 +1,6 @@
 /**
 * @file coil_vm.c
-* @brief Advanced Virtual Machine for COIL with dynamic memory management
+* @brief Virtual Machine for COIL
 */
 
 #include <stdio.h>
@@ -10,77 +10,7 @@
 #include <stdbool.h>
 #include <unistd.h>
 #include "coil_format.h"
-
-/**
-* @brief Maximum static memory size in bytes
-*/
-#define STATIC_MEMORY_SIZE 4096
-
-/**
-* @brief Maximum heap size in bytes
-*/
-#define HEAP_SIZE 65536
-
-/**
-* @brief Maximum stack size in bytes
-*/
-#define STACK_SIZE 4096
-
-/**
-* @brief Maximum call stack size (for function returns)
-*/
-#define CALL_STACK_SIZE 256
-
-/**
-* @brief Maximum number of labels
-*/
-#define MAX_LABELS 256
-
-/**
-* @brief Memory block header structure for heap allocations
-*/
-typedef struct memory_block {
-  size_t size;                 /**< Size of allocated block */
-  bool used;                   /**< Whether block is in use */
-  struct memory_block *next;   /**< Next block in the list */
-  struct memory_block *prev;   /**< Previous block in the list */
-} memory_block_t;
-
-/**
-* @brief Label entry structure
-*/
-typedef struct {
-  uint16_t label_id;         /**< Label identifier */
-  long file_position;        /**< File position for this label */
-} label_entry_t;
-
-/**
-* @brief VM state structure
-*/
-typedef struct {
-  uint8_t static_memory[STATIC_MEMORY_SIZE];  /**< Static memory space */
-  size_t static_memory_used;                 /**< Amount of static memory used */
-  
-  uint8_t *heap;                             /**< Heap memory */
-  memory_block_t *free_list;                 /**< List of free memory blocks */
-  
-  uint8_t stack[STACK_SIZE];                 /**< Data stack */
-  size_t stack_used;                         /**< Amount of stack used */
-  
-  long call_stack[CALL_STACK_SIZE];          /**< Call stack for function returns */
-  size_t call_stack_used;                    /**< Amount of call stack used */
-  
-  label_entry_t labels[MAX_LABELS];          /**< Label table */
-  size_t label_count;                        /**< Number of labels defined */
-  
-  FILE *input_file;                          /**< Input file for instructions */
-  bool binary_mode;                          /**< Flag for binary input format */
-  
-  uint64_t instruction_count;                /**< Number of instructions executed */
-  bool running;                              /**< Flag to control execution */
-  
-  int exit_code;                             /**< Exit code when program terminates */
-} vm_state_t;
+#include "coil_vm.h"
 
 /**
 * @brief Initialize the VM state
@@ -96,22 +26,8 @@ int initialize_vm(vm_state_t *state, FILE *input_file, bool binary_mode) {
   }
   
   // Initialize static memory
-  memset(state->static_memory, 0, STATIC_MEMORY_SIZE);
-  state->static_memory_used = 0;
-  
-  // Initialize heap
-  state->heap = (uint8_t*)malloc(HEAP_SIZE);
-  if (!state->heap) {
-    perror("malloc");
-    return -1;
-  }
-  
-  // Set up initial free block
-  state->free_list = (memory_block_t*)state->heap;
-  state->free_list->size = HEAP_SIZE - sizeof(memory_block_t);
-  state->free_list->used = false;
-  state->free_list->next = NULL;
-  state->free_list->prev = NULL;
+  memset(state->memory, 0, STATIC_MEMORY_SIZE);
+  state->memory_used = 0;
   
   // Initialize stack
   memset(state->stack, 0, STACK_SIZE);
@@ -136,144 +52,19 @@ int initialize_vm(vm_state_t *state, FILE *input_file, bool binary_mode) {
 }
 
 /**
-* @brief Clean up resources used by the VM
-* 
-* @param state Pointer to the VM state
-*/
-void cleanup_vm(vm_state_t *state) {
-  if (state) {
-    if (state->heap) {
-      free(state->heap);
-      state->heap = NULL;
-    }
-  }
-}
-
-/**
-* @brief Get a pointer to a static memory address
+* @brief Get a pointer to a memory address
 * 
 * @param state Pointer to the VM state
 * @param addr Memory address
-* @return Pointer to the static memory location or NULL if out of bounds
+* @return Pointer to the memory location, or NULL if invalid
 */
-void* get_static_memory_ptr(vm_state_t *state, uint16_t addr) {
+void* get_memory_ptr(vm_state_t *state, uint16_t addr) {
   if (addr >= STATIC_MEMORY_SIZE) {
-    fprintf(stderr, "Static memory access out of bounds: %u\n", addr);
+    fprintf(stderr, "Memory access out of bounds: %u\n", addr);
     return NULL;
   }
   
-  return &state->static_memory[addr];
-}
-
-/**
-* @brief Allocate memory on the heap
-* 
-* @param state Pointer to the VM state
-* @param size Size of memory to allocate in bytes
-* @return Absolute pointer to allocated memory or NULL on failure
-*/
-void* vm_malloc(vm_state_t *state, size_t size) {
-  if (!state || !state->heap || size == 0) {
-    return NULL;
-  }
-  
-  // Align size to 8-byte boundary
-  size = (size + 7) & ~7;
-  
-  // Search for a suitable free block
-  memory_block_t *block = state->free_list;
-  while (block) {
-    if (!block->used && block->size >= size) {
-      // Found a suitable block
-      
-      // Check if we should split this block
-      if (block->size >= size + sizeof(memory_block_t) + 16) { // Minimum block size is 16 bytes
-        // Calculate new block position
-        memory_block_t *new_block = (memory_block_t*)((uint8_t*)block + sizeof(memory_block_t) + size);
-        new_block->size = block->size - size - sizeof(memory_block_t);
-        new_block->used = false;
-        
-        // Update linked list
-        new_block->next = block->next;
-        if (new_block->next) {
-          new_block->next->prev = new_block;
-        }
-        
-        new_block->prev = block;
-        block->next = new_block;
-        
-        // Update this block's size
-        block->size = size;
-      }
-      
-      // Mark block as used
-      block->used = true;
-      
-      // Return pointer to memory after the header
-      return (void*)((uint8_t*)block + sizeof(memory_block_t));
-    }
-    
-    block = block->next;
-  }
-  
-  // No suitable block found
-  fprintf(stderr, "Memory allocation failed: no suitable block for %lu bytes\n", (unsigned long)size);
-  return NULL;
-}
-
-/**
-* @brief Free memory previously allocated with vm_malloc
-* 
-* @param state Pointer to the VM state
-* @param ptr Pointer to memory to free
-* @return 0 on success, non-zero on failure
-*/
-int vm_free(vm_state_t *state, void *ptr) {
-  if (!state || !state->heap || !ptr) {
-    return -1;
-  }
-  
-  // Get block header
-  memory_block_t *block = (memory_block_t*)((uint8_t*)ptr - sizeof(memory_block_t));
-  
-  // Validate pointer (check if within heap range)
-  if ((uint8_t*)block < state->heap || (uint8_t*)block >= state->heap + HEAP_SIZE) {
-    fprintf(stderr, "Invalid free pointer: %p\n", ptr);
-    return -1;
-  }
-  
-  // Mark block as free
-  block->used = false;
-  
-  // Try to merge with next block if it's free
-  if (block->next && !block->next->used) {
-    memory_block_t *next = block->next;
-    
-    // Update size
-    block->size += sizeof(memory_block_t) + next->size;
-    
-    // Update linked list
-    block->next = next->next;
-    if (next->next) {
-      next->next->prev = block;
-    }
-  }
-  
-  // Try to merge with previous block if it's free
-  if (block->prev && !block->prev->used) {
-    memory_block_t *prev = block->prev;
-    
-    // Update size
-    prev->size += sizeof(memory_block_t) + block->size;
-    
-    // Update linked list
-    prev->next = block->next;
-    if (block->next) {
-      block->next->prev = prev;
-    }
-  }
-  
-  return 0;
+  return &state->memory[addr];
 }
 
 /**
@@ -486,7 +277,7 @@ int collect_labels(vm_state_t *state) {
     
     // Scan through the file looking for label definitions
     while ((result = read_binary_instruction(state, &instruction)) == 0) {
-      if (instruction.op_code == 0xFFFE) { // Label definition
+      if (instruction.op_code == OP_LABEL_DEF) { // Label definition
         uint16_t label_id = instruction.var_address;
         long label_pos = ftell(state->input_file);
         
@@ -516,107 +307,6 @@ int collect_labels(vm_state_t *state) {
 }
 
 /**
-* @brief Execute a memory allocation operation
-* 
-* @param state Pointer to the VM state
-* @param instruction Current instruction
-* @return 0 on success, non-zero on failure
-*/
-int execute_memory_operation(vm_state_t *state, binary_instruction_t *instruction) {
-  switch (instruction->op_code) {
-    case 0x0600: { // MEM_ALLOC - Allocate memory on heap
-      // In var_address: address to store pointer
-      // In imm_value: size to allocate
-      
-      void *ptr = vm_malloc(state, (size_t)instruction->imm_value);
-      if (!ptr) {
-        fprintf(stderr, "Memory allocation failed\n");
-        return -1;
-      }
-      
-      // Store pointer in static memory
-      void *dest = get_static_memory_ptr(state, instruction->var_address);
-      if (!dest) {
-        return -1;
-      }
-      
-      // Convert to a relative pointer for storage
-      uint64_t rel_ptr = (uint64_t)((uint8_t*)ptr - state->heap);
-      memcpy(dest, &rel_ptr, sizeof(uint64_t));
-      
-      break;
-    }
-    
-    case 0x0601: { // MEM_FREE - Free allocated memory
-      // In var_address: address containing pointer to free
-      
-      void *addr_ptr = get_static_memory_ptr(state, instruction->var_address);
-      if (!addr_ptr) {
-        return -1;
-      }
-      
-      // Read the relative pointer
-      uint64_t rel_ptr;
-      memcpy(&rel_ptr, addr_ptr, sizeof(uint64_t));
-      
-      // Convert to absolute pointer
-      void *ptr = (void*)(state->heap + rel_ptr);
-      
-      if (vm_free(state, ptr) != 0) {
-        fprintf(stderr, "Memory free failed\n");
-        return -1;
-      }
-      
-      break;
-    }
-    
-    case 0x0602: { // MEM_READ - Read from heap
-      // In var_address: destination in static memory
-      // In imm_value: bits 0-31: size to read, bits 32-63: source pointer (relative)
-      
-      uint32_t size = (uint32_t)instruction->imm_value;
-      uint32_t rel_ptr = (uint32_t)(instruction->imm_value >> 32);
-      
-      void *src = (void*)(state->heap + rel_ptr);
-      void *dest = get_static_memory_ptr(state, instruction->var_address);
-      
-      if (!dest) {
-        return -1;
-      }
-      
-      memcpy(dest, src, size);
-      
-      break;
-    }
-    
-    case 0x0603: { // MEM_WRITE - Write to heap
-      // In var_address: source in static memory
-      // In imm_value: bits 0-31: size to write, bits 32-63: destination pointer (relative)
-      
-      uint32_t size = (uint32_t)instruction->imm_value;
-      uint32_t rel_ptr = (uint32_t)(instruction->imm_value >> 32);
-      
-      void *src = get_static_memory_ptr(state, instruction->var_address);
-      void *dest = (void*)(state->heap + rel_ptr);
-      
-      if (!src) {
-        return -1;
-      }
-      
-      memcpy(dest, src, size);
-      
-      break;
-    }
-    
-    default:
-      fprintf(stderr, "Unknown memory operation: %04X\n", instruction->op_code);
-      return -1;
-  }
-  
-  return 0;
-}
-
-/**
 * @brief Execute a binary instruction
 * 
 * @param state Pointer to the VM state
@@ -632,15 +322,15 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
         return -1;
       }
       
-      void *ptr = get_static_memory_ptr(state, instruction->var_address);
+      void *ptr = get_memory_ptr(state, instruction->var_address);
       if (!ptr) {
         return -1;
       }
       
       memcpy(ptr, &instruction->imm_value, size);
       
-      if (instruction->var_address + size > state->static_memory_used) {
-        state->static_memory_used = instruction->var_address + size;
+      if (instruction->var_address + size > state->memory_used) {
+        state->memory_used = instruction->var_address + size;
       }
       
       break;
@@ -653,8 +343,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
         return -1;
       }
       
-      void *dest = get_static_memory_ptr(state, instruction->var_address);
-      void *src = get_static_memory_ptr(state, (uint16_t)instruction->imm_value);
+      void *dest = get_memory_ptr(state, instruction->var_address);
+      void *src = get_memory_ptr(state, (uint16_t)instruction->imm_value);
       
       if (!dest || !src) {
         return -1;
@@ -662,8 +352,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       
       memcpy(dest, src, size);
       
-      if (instruction->var_address + size > state->static_memory_used) {
-        state->static_memory_used = instruction->var_address + size;
+      if (instruction->var_address + size > state->memory_used) {
+        state->memory_used = instruction->var_address + size;
       }
       
       break;
@@ -676,8 +366,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
         return -1;
       }
       
-      void *dest = get_static_memory_ptr(state, instruction->var_address);
-      void *src = get_static_memory_ptr(state, (uint16_t)instruction->imm_value);
+      void *dest = get_memory_ptr(state, instruction->var_address);
+      void *src = get_memory_ptr(state, (uint16_t)instruction->imm_value);
       
       if (!dest || !src) {
         return -1;
@@ -692,9 +382,9 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src1_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t src2_addr = (uint16_t)instruction->imm_value;
       
-      int64_t *dest = (int64_t*)get_static_memory_ptr(state, instruction->var_address);
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *dest = (int64_t*)get_memory_ptr(state, instruction->var_address);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!dest || !src1 || !src2) {
         return -1;
@@ -709,9 +399,9 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src1_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t src2_addr = (uint16_t)instruction->imm_value;
       
-      int64_t *dest = (int64_t*)get_static_memory_ptr(state, instruction->var_address);
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *dest = (int64_t*)get_memory_ptr(state, instruction->var_address);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!dest || !src1 || !src2) {
         return -1;
@@ -726,9 +416,9 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src1_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t src2_addr = (uint16_t)instruction->imm_value;
       
-      int64_t *dest = (int64_t*)get_static_memory_ptr(state, instruction->var_address);
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *dest = (int64_t*)get_memory_ptr(state, instruction->var_address);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!dest || !src1 || !src2) {
         return -1;
@@ -743,9 +433,9 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src1_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t src2_addr = (uint16_t)instruction->imm_value;
       
-      int64_t *dest = (int64_t*)get_static_memory_ptr(state, instruction->var_address);
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *dest = (int64_t*)get_memory_ptr(state, instruction->var_address);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!dest || !src1 || !src2) {
         return -1;
@@ -765,9 +455,9 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src1_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t src2_addr = (uint16_t)instruction->imm_value;
       
-      int64_t *dest = (int64_t*)get_static_memory_ptr(state, instruction->var_address);
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *dest = (int64_t*)get_memory_ptr(state, instruction->var_address);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!dest || !src1 || !src2) {
         return -1;
@@ -802,8 +492,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src2_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t label_id = (uint16_t)instruction->imm_value;
       
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!src1 || !src2) {
         return -1;
@@ -829,8 +519,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src2_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t label_id = (uint16_t)instruction->imm_value;
       
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!src1 || !src2) {
         return -1;
@@ -856,8 +546,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src2_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t label_id = (uint16_t)instruction->imm_value;
       
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!src1 || !src2) {
         return -1;
@@ -883,8 +573,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src2_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t label_id = (uint16_t)instruction->imm_value;
       
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!src1 || !src2) {
         return -1;
@@ -910,8 +600,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src2_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t label_id = (uint16_t)instruction->imm_value;
       
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!src1 || !src2) {
         return -1;
@@ -937,8 +627,8 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       uint16_t src2_addr = (uint16_t)(instruction->imm_value >> 32);
       uint16_t label_id = (uint16_t)instruction->imm_value;
       
-      int64_t *src1 = (int64_t*)get_static_memory_ptr(state, src1_addr);
-      int64_t *src2 = (int64_t*)get_static_memory_ptr(state, src2_addr);
+      int64_t *src1 = (int64_t*)get_memory_ptr(state, src1_addr);
+      int64_t *src2 = (int64_t*)get_memory_ptr(state, src2_addr);
       
       if (!src1 || !src2) {
         return -1;
@@ -1007,7 +697,7 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
         return -1;
       }
       
-      void *src = get_static_memory_ptr(state, instruction->var_address);
+      void *src = get_memory_ptr(state, instruction->var_address);
       if (!src) {
         return -1;
       }
@@ -1026,7 +716,7 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
         return -1;
       }
       
-      void *dest = get_static_memory_ptr(state, instruction->var_address);
+      void *dest = get_memory_ptr(state, instruction->var_address);
       if (!dest) {
         return -1;
       }
@@ -1044,7 +734,7 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       long current_pos = ftell(state->input_file);
       
       if (read_binary_instruction(state, &arg_instruction) == 0 && 
-          arg_instruction.op_code == 0xFFFF) {
+          arg_instruction.op_code == OP_ARG_DATA) {
         
         // Arguments are available in the arg_instruction
         uint16_t syscall_num = (uint16_t)instruction->imm_value;
@@ -1056,7 +746,7 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
             uint16_t buf_addr = args[1];
             size_t count = args[2];
             
-            void *buf = get_static_memory_ptr(state, buf_addr);
+            void *buf = get_memory_ptr(state, buf_addr);
             if (!buf) {
               return -1;
             }
@@ -1109,16 +799,9 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       break;
     }
     
-    case 0xFFFE: // Label definition - skip
+    case OP_LABEL_DEF: // Label definition - skip
       break;
       
-    // Memory management operations
-    case 0x0600:
-    case 0x0601:
-    case 0x0602:
-    case 0x0603:
-      return execute_memory_operation(state, instruction);
-    
     default:
       fprintf(stderr, "Unsupported operation code: %04X\n", instruction->op_code);
       return -1;
@@ -1177,8 +860,8 @@ int run_vm(vm_state_t *state) {
 void print_statistics(vm_state_t *state) {
   printf("\nVM Statistics:\n");
   printf("  Instructions executed: %lu\n", state->instruction_count);
-  printf("  Static memory used: %lu bytes\n", state->static_memory_used);
-  printf("  Static memory limit: %d bytes\n", STATIC_MEMORY_SIZE);
+  printf("  Memory used: %lu bytes\n", state->memory_used);
+  printf("  Memory limit: %d bytes\n", STATIC_MEMORY_SIZE);
   printf("  Stack used: %lu bytes\n", state->stack_used);
   printf("  Stack limit: %d bytes\n", STACK_SIZE);
   printf("  Call stack depth: %lu\n", state->call_stack_used);
@@ -1195,8 +878,9 @@ void print_statistics(vm_state_t *state) {
 */
 int main(int argc, char *argv[]) {
   if (argc < 2) {
-    fprintf(stderr, "Usage: %s [-b] <coil_file>\n", argv[0]);
+    fprintf(stderr, "Usage: %s [-b] [-s] <coil_file>\n", argv[0]);
     fprintf(stderr, "  -b: Binary mode (default is text mode)\n");
+    fprintf(stderr, "  -s: Show statistics after execution\n");
     return 1;
   }
   
@@ -1242,7 +926,6 @@ int main(int argc, char *argv[]) {
   // First pass to collect labels
   if (collect_labels(&state) != 0) {
     fprintf(stderr, "Failed to collect labels\n");
-    cleanup_vm(&state);
     fclose(file);
     return 1;
   }
@@ -1256,7 +939,6 @@ int main(int argc, char *argv[]) {
   }
   
   // Clean up
-  cleanup_vm(&state);
   fclose(file);
   
   return exit_code;

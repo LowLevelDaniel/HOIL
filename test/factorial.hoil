@@ -85,7 +85,7 @@ CF LABEL convert_start
   ; Handle special case of 0
   MATH ADD digit, digit, one
   MATH ADD remainder, ascii_0, zero
-  VAL DEFV int8, buffer, remainder
+  VAL MOVV int8, buffer, remainder
   CF JMP convert_end
   
   CF LABEL do_convert
@@ -99,7 +99,7 @@ CF LABEL convert_start
   MATH ADD remainder, remainder, ascii_0
   
   ; Store digit in buffer + digit
-  VAL DEFV int8, buffer, remainder
+  VAL MOVV int8, buffer, remainder
   
   ; digit++
   MATH ADD digit, digit, one

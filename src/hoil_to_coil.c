@@ -1,7 +1,10 @@
 /**
-* @file enhanced_hoil_to_coil.c
-* @brief Enhanced converter from HOIL to COIL supporting new instruction format
-*        and additional language features
+* @file hoil_to_coil.c
+* @brief Converter from HOIL to COIL
+*
+* This file contains the implementation of the HOIL to COIL converter,
+* which translates HOIL (Human Oriented Intermediate Language) code to
+* COIL (Computer Oriented Intermediate Language) format.
 */
 
 #include <stdio.h>
@@ -11,56 +14,7 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include "coil_format.h"
-
-/**
-* @brief Maximum line length for HOIL instructions
-*/
-#define MAX_LINE_LENGTH 256
-
-/**
-* @brief Maximum number of tokens in a HOIL instruction
-*/
-#define MAX_TOKENS 16
-
-/**
-* @brief Maximum number of symbols in symbol table
-*/
-#define MAX_SYMBOLS 256
-
-/**
-* @brief Symbol table entry structure
-*/
-typedef struct {
-  char name[64];            /**< Symbol name */
-  uint16_t address;         /**< Memory address */
-  mem_type_t type;          /**< Memory type */
-} symbol_entry_t;
-
-/**
-* @brief Symbol table structure
-*/
-typedef struct {
-  symbol_entry_t entries[MAX_SYMBOLS];  /**< Symbol entries */
-  size_t count;                         /**< Number of symbols defined */
-} symbol_table_t;
-
-/**
-* @brief Label table entry structure
-*/
-typedef struct {
-  char name[64];            /**< Label name */
-  uint16_t id;              /**< Label identifier */
-  bool defined;             /**< Flag indicating whether the label is defined */
-} label_entry_t;
-
-/**
-* @brief Label table structure
-*/
-typedef struct {
-  label_entry_t entries[MAX_SYMBOLS];   /**< Label entries */
-  size_t count;                         /**< Number of labels defined */
-  uint16_t next_id;                     /**< Next label identifier */
-} label_table_t;
+#include "hoil_format.h"
 
 /**
 * @brief Converter state structure
@@ -263,7 +217,7 @@ int tokenize_hoil_line(char *line, char **tokens, int max_tokens) {
 * @param type_str HOIL type string
 * @return COIL type code
 */
-mem_type_t convert_type(const char *type_str) {
+mem_type_t hoil_type_to_coil_type(const char *type_str) {
   if (strcmp(type_str, "dint") == 0) {
     return MEM_INT64;
   } else if (strcmp(type_str, "int8") == 0) {
@@ -430,7 +384,7 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
   binary_instruction_t instruction;
   
   if (strcmp(tokens[1], "DEFV") == 0) {
-    mem_type_t type = convert_type(tokens[2]);
+    mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
       return -1;
     }
@@ -449,7 +403,7 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     write_instruction(state, &instruction);
     
   } else if (strcmp(tokens[1], "MOVV") == 0) {
-    mem_type_t type = convert_type(tokens[2]);
+    mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
       return -1;
     }
@@ -471,7 +425,7 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     write_instruction(state, &instruction);
     
   } else if (strcmp(tokens[1], "LOAD") == 0) {
-    mem_type_t type = convert_type(tokens[2]);
+    mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
       return -1;
     }
@@ -493,7 +447,7 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     write_instruction(state, &instruction);
     
   } else if (strcmp(tokens[1], "STORE") == 0) {
-    mem_type_t type = convert_type(tokens[2]);
+    mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
       return -1;
     }
@@ -849,7 +803,7 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     }
     
     // Generate label definition instruction (will be skipped during execution)
-    init_instruction(&instruction, 0xFFFE, 0, label_id, 0);
+    init_instruction(&instruction, OP_LABEL_DEF, 0, label_id, 0);
     write_instruction(state, &instruction);
     
   } else if (strcmp(tokens[1], "CALL") == 0) {
@@ -932,7 +886,7 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     // Generate arguments instruction if we have any
     if (num_tokens > 3) {
       binary_instruction_t args_instruction;
-      init_instruction(&args_instruction, 0xFFFF, 0, 0, 0);
+      init_instruction(&args_instruction, OP_ARG_DATA, 0, 0, 0);
       
       // Pack up to 4 additional arguments
       for (int i = 3; i < num_tokens && i < 7; i++) {
@@ -956,7 +910,7 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
           strncpy(type_str, tokens[i] + 7, strlen(tokens[i]) - 8);
           type_str[strlen(tokens[i]) - 8] = '\0';
           
-          mem_type_t type = convert_type(type_str);
+          mem_type_t type = hoil_type_to_coil_type(type_str);
           ((uint16_t*)&args_instruction.imm_value)[i-3] = get_type_size(type);
         } else {
           uint16_t arg = resolve_identifier(state, tokens[i], NULL);
@@ -988,25 +942,6 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
 }
 
 /**
-* @brief Convert a HOIL MEM (Memory) instruction to COIL format
-* 
-* @param state Pointer to the converter state
-* @param tokens Array of HOIL tokens
-* @param num_tokens Number of tokens
-* @return 0 on success, non-zero on failure
-*/
-int convert_mem_instruction(converter_state_t *state, char **tokens, int num_tokens) {
-  if (num_tokens < 3) {
-    fprintf(stderr, "MEM instruction requires at least 3 tokens\n");
-    return -1;
-  }
-  
-  // TODO: Implement memory management instructions
-  fprintf(stderr, "MEM instructions not yet implemented\n");
-  return -1;
-}
-
-/**
 * @brief Convert a HOIL instruction to COIL format
 * 
 * @param state Pointer to the converter state
@@ -1027,8 +962,6 @@ int convert_instruction(converter_state_t *state, char **tokens, int num_tokens)
     return convert_bit_instruction(state, tokens, num_tokens);
   } else if (strcmp(tokens[0], "CF") == 0) {
     return convert_cf_instruction(state, tokens, num_tokens);
-  } else if (strcmp(tokens[0], "MEM") == 0) {
-    return convert_mem_instruction(state, tokens, num_tokens);
   } else {
     fprintf(stderr, "Unknown instruction: %s\n", tokens[0]);
     return -1;
@@ -1072,7 +1005,7 @@ int convert_hoil_to_coil(const char *input_filename, const char *output_filename
     fprintf(output, "; Original HOIL file: %s\n\n", input_filename);
   }
   
-  char line[MAX_LINE_LENGTH];
+  char line[MAX_HOIL_LINE_LENGTH];
   int line_num = 0;
   
   while (fgets(line, sizeof(line), input)) {
@@ -1084,12 +1017,12 @@ int convert_hoil_to_coil(const char *input_filename, const char *output_filename
     }
     
     // Make a copy of the line for tokenization
-    char line_copy[MAX_LINE_LENGTH];
+    char line_copy[MAX_HOIL_LINE_LENGTH];
     strncpy(line_copy, line, sizeof(line_copy));
     
     // Tokenize the line
-    char *tokens[MAX_TOKENS];
-    int num_tokens = tokenize_hoil_line(line_copy, tokens, MAX_TOKENS);
+    char *tokens[MAX_HOIL_TOKENS];
+    int num_tokens = tokenize_hoil_line(line_copy, tokens, MAX_HOIL_TOKENS);
     
     // Convert the instruction
     if (convert_instruction(&state, tokens, num_tokens) != 0) {
