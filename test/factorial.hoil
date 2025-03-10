@@ -1,0 +1,117 @@
+; Factorial calculator in HOIL
+; Calculates factorial of the number in n (5 by default)
+
+; Initialize variables
+VAL DEFV dint, n, id5       ; Input number (n = 5)
+VAL DEFV dint, result, id1  ; Result (starting with 1)
+VAL DEFV dint, i, id1       ; Loop counter (starting with 1)
+VAL DEFV dint, temp, id0    ; Temporary value for comparison
+VAL DEFV dint, one, id1     ; Constant 1
+
+; Print header
+VAL DEFV int8, msg1, id'F   ; 'F'
+VAL DEFV int8, msg2, id'a   ; 'a'
+VAL DEFV int8, msg3, id'c   ; 'c'
+VAL DEFV int8, msg4, id't   ; 't'
+VAL DEFV int8, msg5, id'o   ; 'o'
+VAL DEFV int8, msg6, id'r   ; 'r'
+VAL DEFV int8, msg7, id'i   ; 'i'
+VAL DEFV int8, msg8, id'a   ; 'a'
+VAL DEFV int8, msg9, id'l   ; 'l'
+VAL DEFV int8, msg10, id' ' ; ' '
+VAL DEFV int8, msg11, id'o' ; 'o'
+VAL DEFV int8, msg12, id'f' ; 'f'
+VAL DEFV int8, msg13, id' ' ; ' '
+VAL DEFV int8, msgnum, id'5' ; '5'
+VAL DEFV int8, msg14, id':' ; ':'
+VAL DEFV int8, msg15, id' ' ; ' '
+VAL DEFV int8, newline, id10 ; '\n'
+
+; Print header
+CF SYSC 1, 1, &msg1, 1
+CF SYSC 1, 1, &msg2, 1
+CF SYSC 1, 1, &msg3, 1
+CF SYSC 1, 1, &msg4, 1
+CF SYSC 1, 1, &msg5, 1
+CF SYSC 1, 1, &msg6, 1
+CF SYSC 1, 1, &msg7, 1
+CF SYSC 1, 1, &msg8, 1
+CF SYSC 1, 1, &msg9, 1
+CF SYSC 1, 1, &msg10, 1
+CF SYSC 1, 1, &msg11, 1
+CF SYSC 1, 1, &msg12, 1
+CF SYSC 1, 1, &msg13, 1
+CF SYSC 1, 1, &msgnum, 1
+CF SYSC 1, 1, &msg14, 1
+CF SYSC 1, 1, &msg15, 1
+
+; Main loop
+CF LABEL loop_start
+  ; Check if i > n (temp = i - n)
+  MATH SUB temp, i, n
+  
+  ; If temp > 0, exit loop
+  CF JCOND GT, temp, one, loop_end
+  
+  ; result = result * i
+  MATH MUL result, result, i
+  
+  ; i = i + 1
+  MATH ADD i, i, one
+  
+  ; Loop back
+  CF JMP loop_start
+
+CF LABEL loop_end
+
+; Convert result to a string (simple implementation, only works for small numbers)
+; In a real implementation, this would use a proper integer-to-string conversion
+VAL DEFV dint, digit, id0     ; Current digit
+VAL DEFV dint, remainder, id0 ; Remainder
+VAL DEFV dint, ten, id10      ; Constant 10
+VAL DEFV dint, zero, id0      ; Constant 0
+VAL DEFV dint, ascii_0, id48  ; ASCII '0'
+VAL DEFV int8, buffer, id0    ; Start of buffer
+
+; Convert to string (reversed)
+CF LABEL convert_start
+  ; If result == 0 and we've processed at least one digit, exit
+  CF JCOND EQ, result, zero, check_digits
+  CF JMP do_convert
+  
+  CF LABEL check_digits
+  CF JCOND GT, digit, zero, convert_end
+  
+  ; Handle special case of 0
+  MATH ADD digit, digit, one
+  MATH ADD remainder, ascii_0, zero
+  VAL DEFV int8, buffer, remainder
+  CF JMP convert_end
+  
+  CF LABEL do_convert
+  ; remainder = result % 10
+  MATH MOD remainder, result, ten
+  
+  ; result = result / 10
+  MATH DIV result, result, ten
+  
+  ; Convert to ASCII
+  MATH ADD remainder, remainder, ascii_0
+  
+  ; Store digit in buffer + digit
+  VAL DEFV int8, buffer, remainder
+  
+  ; digit++
+  MATH ADD digit, digit, one
+  
+  ; Loop
+  CF JMP convert_start
+
+CF LABEL convert_end
+
+; Print the result
+CF SYSC 1, 1, &buffer, 1
+CF SYSC 1, 1, &newline, 1
+
+; Exit
+CF SYSC 60, 0
