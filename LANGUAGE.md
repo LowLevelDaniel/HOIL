@@ -14,7 +14,7 @@ HOIL (Human Oriented Intermediate Language) is a high-level assembly-like langua
 
 | Type Name | Description |
 |-----------|-------------|
-| `bool`    | Boolean (1 byte) |
+| `bool`    | Boolean (1 bit~ (optimized type stored as int8 for the most part but COIL assemblers / interpreters can pack booleans into the same int8 at different offsets if wanted)) |
 | `int8`    | 8-bit signed integer |
 | `int16`   | 16-bit signed integer |
 | `int32`   | 32-bit signed integer |
