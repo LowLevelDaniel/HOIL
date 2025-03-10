@@ -1,0 +1,81 @@
+; Example HOIL program demonstrating basic features
+; This program calculates and prints the sum of two numbers
+
+; Initialize variables
+VAL DEFV dint, num1, id42       ; First number (42)
+VAL DEFV dint, num2, id58       ; Second number (58)
+VAL DEFV dint, result, id0      ; Result variable (initialized to 0)
+
+; Calculate the sum
+MATH ADD result, num1, num2     ; result = num1 + num2
+
+; Define constants for output
+VAL DEFV int8, msg1, id'S       ; 'S'
+VAL DEFV int8, msg2, id'u       ; 'u'
+VAL DEFV int8, msg3, id'm       ; 'm'
+VAL DEFV int8, msg4, id':       ; ':'
+VAL DEFV int8, msg5, id' '      ; ' '
+VAL DEFV int8, newline, id10    ; '\n'
+
+; Print "Sum: "
+CF SYSC 1, 1, &msg1, 1
+CF SYSC 1, 1, &msg2, 1
+CF SYSC 1, 1, &msg3, 1
+CF SYSC 1, 1, &msg4, 1
+CF SYSC 1, 1, &msg5, 1
+
+; Convert result to a string and print it
+; For simplicity, we'll assume result is in the range 0-999
+
+; Initialize variables for conversion
+VAL DEFV dint, temp, id0        ; Temporary value for conversion
+VAL DEFV dint, digit, id0       ; Current digit
+VAL DEFV dint, divisor, id100   ; Divisor for digit extraction
+VAL DEFV dint, ten, id10        ; Constant 10
+VAL DEFV dint, zero, id0        ; Constant 0
+VAL DEFV dint, ascii_0, id48    ; ASCII '0'
+
+; Copy result to temp
+VAL MOVV dint, temp, result
+
+; Extract and print hundreds digit
+MATH DIV digit, temp, divisor   ; digit = temp / 100
+MATH MOD temp, temp, divisor    ; temp = temp % 100
+
+; Add ASCII '0' to get the character code
+MATH ADD digit, digit, ascii_0
+
+; Only print if non-zero
+CF JCOND EQ, digit, ascii_0, skip_hundreds
+
+; Store digit in output buffer and print
+VAL DEFV int8, output, id0
+VAL MOVV int8, output, digit
+CF SYSC 1, 1, &output, 1
+
+CF LABEL skip_hundreds
+
+; Extract and print tens digit
+VAL DEFV dint, divisor, id10    ; Change divisor to 10
+MATH DIV digit, temp, divisor   ; digit = temp / 10
+MATH MOD temp, temp, divisor    ; temp = temp % 10
+
+; Add ASCII '0' to get the character code
+MATH ADD digit, digit, ascii_0
+
+; Store digit in output buffer and print
+VAL MOVV int8, output, digit
+CF SYSC 1, 1, &output, 1
+
+; Extract and print ones digit
+MATH ADD temp, temp, ascii_0    ; Add ASCII '0' to temp
+
+; Store digit in output buffer and print
+VAL MOVV int8, output, temp
+CF SYSC 1, 1, &output, 1
+
+; Print newline
+CF SYSC 1, 1, &newline, 1
+
+; Exit
+CF SYSC 60, 0

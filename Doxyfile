@@ -1,0 +1,98 @@
+# Doxyfile for HOIL-COIL project
+
+# Project settings
+PROJECT_NAME           = "HOIL-COIL"
+PROJECT_NUMBER         = "0.1.0"
+PROJECT_BRIEF          = "Cross-platform intermediate language system"
+PROJECT_LOGO           = 
+OUTPUT_DIRECTORY       = "docs"
+OUTPUT_LANGUAGE        = English
+
+# Build settings
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+RECURSIVE              = YES
+HIDE_SCOPE_NAMES       = NO
+SHOW_INCLUDE_FILES     = YES
+INLINE_INFO            = YES
+SORT_MEMBER_DOCS       = YES
+SORT_BRIEF_DOCS        = YES
+SORT_MEMBERS_CTORS_1ST = YES
+SORT_GROUP_NAMES       = YES
+
+# Input settings
+INPUT                  = src include README.md GRAMMAR_HOIL.md GRAMMAR_COIL.md
+FILE_PATTERNS          = *.c *.h *.md
+EXTENSION_MAPPING      = md=Markdown
+RECURSIVE              = YES
+EXCLUDE                = build
+USE_MDFILE_AS_MAINPAGE = README.md
+
+# Output settings
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+HTML_COLORSTYLE_HUE    = 220
+HTML_COLORSTYLE_SAT    = 100
+HTML_COLORSTYLE_GAMMA  = 80
+HTML_DYNAMIC_SECTIONS  = YES
+GENERATE_TREEVIEW      = YES
+TREEVIEW_WIDTH         = 250
+GENERATE_LATEX         = NO
+GENERATE_RTF           = NO
+GENERATE_MAN           = NO
+GENERATE_XML           = NO
+
+# Diagrams settings
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
+DOT_TRANSPARENT        = YES
+DOT_GRAPH_MAX_NODES    = 50
+DOT_MULTI_TARGETS      = YES
+UML_LOOK               = YES
+UML_LIMIT_NUM_FIELDS   = 10
+TEMPLATE_RELATIONS     = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = YES
+DOT_PATH               = 
+
+# Preprocessing settings
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+SEARCH_INCLUDES        = YES
+INCLUDE_PATH           = include
+PREDEFINED             = 
+SKIP_FUNCTION_MACROS   = YES
+
+# Message settings
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = YES
+WARN_FORMAT            = "$file:$line: $text"
+
+# Other settings
+FULL_PATH_NAMES        = YES
+STRIP_FROM_PATH        = 
+STRIP_FROM_INC_PATH    = 
+ABBREVIATE_BRIEF       = "The $name class" \
+                         "The $name widget" \
+                         "The $name file" \
+                         is \
+                         provides \
+                         specifies \
+                         contains \
+                         represents \
+                         a \
+                         an \
+                         the
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = NO
+INHERIT_DOCS           = YES
+TAB_SIZE               = 2

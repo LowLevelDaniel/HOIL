@@ -76,6 +76,10 @@ void* get_memory_ptr(vm_state_t *state, uint16_t addr) {
 * @return 0 on success, non-zero on failure
 */
 int stack_push(vm_state_t *state, const void *value, size_t size) {
+  if (!value || size == 0) {
+    return -1;
+  }
+
   if (state->stack_used + size > STACK_SIZE) {
     fprintf(stderr, "Stack overflow\n");
     return -1;
@@ -96,6 +100,10 @@ int stack_push(vm_state_t *state, const void *value, size_t size) {
 * @return 0 on success, non-zero on failure
 */
 int stack_pop(vm_state_t *state, void *value, size_t size) {
+  if (!value || size == 0) {
+    return -1;
+  }
+
   if (state->stack_used < size) {
     fprintf(stderr, "Stack underflow\n");
     return -1;
@@ -114,7 +122,7 @@ int stack_pop(vm_state_t *state, void *value, size_t size) {
 * @param return_addr Return address
 * @return 0 on success, non-zero on failure
 */
-int call_stack_push(vm_state_t *state, long return_addr) {
+static int call_stack_push(vm_state_t *state, long return_addr) {
   if (state->call_stack_used >= CALL_STACK_SIZE) {
     fprintf(stderr, "Call stack overflow\n");
     return -1;
@@ -131,7 +139,11 @@ int call_stack_push(vm_state_t *state, long return_addr) {
 * @param return_addr Pointer to store the return address
 * @return 0 on success, non-zero on failure
 */
-int call_stack_pop(vm_state_t *state, long *return_addr) {
+static int call_stack_pop(vm_state_t *state, long *return_addr) {
+  if (!return_addr) {
+    return -1;
+  }
+
   if (state->call_stack_used == 0) {
     fprintf(stderr, "Call stack underflow\n");
     return -1;
@@ -149,7 +161,7 @@ int call_stack_pop(vm_state_t *state, long *return_addr) {
 * @param file_position File position for this label
 * @return 0 on success, non-zero on failure
 */
-int add_label(vm_state_t *state, uint16_t label_id, long file_position) {
+static int add_label(vm_state_t *state, uint16_t label_id, long file_position) {
   if (state->label_count >= MAX_LABELS) {
     fprintf(stderr, "Too many labels defined\n");
     return -1;
@@ -177,7 +189,7 @@ int add_label(vm_state_t *state, uint16_t label_id, long file_position) {
 * @param label_id Label identifier
 * @return File position for the label, or -1 if not found
 */
-long find_label(vm_state_t *state, uint16_t label_id) {
+static long find_label(vm_state_t *state, uint16_t label_id) {
   for (size_t i = 0; i < state->label_count; i++) {
     if (state->labels[i].label_id == label_id) {
       return state->labels[i].file_position;
@@ -195,7 +207,7 @@ long find_label(vm_state_t *state, uint16_t label_id) {
 * @param instruction Pointer to store the instruction
 * @return 0 on success, 1 on EOF, negative on error
 */
-int read_binary_instruction(vm_state_t *state, binary_instruction_t *instruction) {
+static int read_binary_instruction(vm_state_t *state, binary_instruction_t *instruction) {
   if (!state || !instruction || !state->input_file) {
     return -1;
   }
@@ -264,12 +276,16 @@ int read_binary_instruction(vm_state_t *state, binary_instruction_t *instruction
 * @param state Pointer to the VM state
 * @return 0 on success, non-zero on failure
 */
-int collect_labels(vm_state_t *state) {
+static int collect_labels(vm_state_t *state) {
   if (!state || !state->input_file) {
     return -1;
   }
   
   long initial_pos = ftell(state->input_file);
+  if (initial_pos < 0) {
+    perror("ftell");
+    return -1;
+  }
   
   if (state->binary_mode) {
     binary_instruction_t instruction;
@@ -313,7 +329,12 @@ int collect_labels(vm_state_t *state) {
 * @param instruction Binary instruction to execute
 * @return 0 on success, non-zero on failure
 */
-int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
+static int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
+  // Validate input parameters
+  if (!state || !instruction) {
+    return -1;
+  }
+
   switch (instruction->op_code) {
     case OP_ALLOC_IMM: {
       size_t size = get_type_size((mem_type_t)instruction->type);
@@ -732,6 +753,10 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
       // Read syscall arguments from next instruction
       binary_instruction_t arg_instruction;
       long current_pos = ftell(state->input_file);
+      if (current_pos < 0) {
+        perror("ftell");
+        return -1;
+      }
       
       if (read_binary_instruction(state, &arg_instruction) == 0 && 
           arg_instruction.op_code == OP_ARG_DATA) {
@@ -773,7 +798,10 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
         }
       } else {
         // No arguments, reset file position
-        fseek(state->input_file, current_pos, SEEK_SET);
+        if (fseek(state->input_file, current_pos, SEEK_SET) != 0) {
+          perror("fseek");
+          return -1;
+        }
         
         uint16_t syscall_num = (uint16_t)instruction->imm_value;
         
@@ -817,8 +845,18 @@ int execute_instruction(vm_state_t *state, binary_instruction_t *instruction) {
 * @return Exit code from the program
 */
 int run_vm(vm_state_t *state) {
+  if (!state) {
+    return -1;
+  }
+
   binary_instruction_t instruction;
   int result;
+  
+  // First pass to collect labels
+  if (collect_labels(state) != 0) {
+    fprintf(stderr, "Failed to collect labels\n");
+    return -1;
+  }
   
   while (state->running) {
     // Read next instruction
@@ -858,6 +896,10 @@ int run_vm(vm_state_t *state) {
 * @param state Pointer to the VM state
 */
 void print_statistics(vm_state_t *state) {
+  if (!state) {
+    return;
+  }
+
   printf("\nVM Statistics:\n");
   printf("  Instructions executed: %lu\n", state->instruction_count);
   printf("  Memory used: %lu bytes\n", state->memory_used);
@@ -886,7 +928,7 @@ int main(int argc, char *argv[]) {
   
   bool binary_mode = false;
   bool stats_mode = false;
-  const char *filename = argv[1];
+  const char *filename = NULL;
   int arg_index = 1;
   
   // Parse arguments
@@ -919,13 +961,6 @@ int main(int argc, char *argv[]) {
   vm_state_t state;
   if (initialize_vm(&state, file, binary_mode) != 0) {
     fprintf(stderr, "Failed to initialize VM\n");
-    fclose(file);
-    return 1;
-  }
-  
-  // First pass to collect labels
-  if (collect_labels(&state) != 0) {
-    fprintf(stderr, "Failed to collect labels\n");
     fclose(file);
     return 1;
   }

@@ -35,7 +35,7 @@ typedef struct {
 * @param binary_output Flag for binary output format
 * @return 0 on success, non-zero on failure
 */
-int initialize_converter(converter_state_t *state, FILE *output, bool binary_output) {
+static int initialize_converter(converter_state_t *state, FILE *output, bool binary_output) {
   if (!state || !output) {
     return -1;
   }
@@ -60,7 +60,11 @@ int initialize_converter(converter_state_t *state, FILE *output, bool binary_out
 * @param type Memory type
 * @return 0 on success, non-zero on failure
 */
-int add_symbol(converter_state_t *state, const char *name, uint16_t address, mem_type_t type) {
+static int add_symbol(converter_state_t *state, const char *name, uint16_t address, mem_type_t type) {
+  if (!state || !name) {
+    return -1;
+  }
+
   if (state->symbols.count >= MAX_SYMBOLS) {
     fprintf(stderr, "Symbol table full\n");
     return -1;
@@ -95,7 +99,11 @@ int add_symbol(converter_state_t *state, const char *name, uint16_t address, mem
 * @param entry Pointer to store the found entry
 * @return 0 on success, non-zero if not found
 */
-int find_symbol(converter_state_t *state, const char *name, symbol_entry_t *entry) {
+static int find_symbol(converter_state_t *state, const char *name, symbol_entry_t *entry) {
+  if (!state || !name) {
+    return -1;
+  }
+
   for (size_t i = 0; i < state->symbols.count; i++) {
     if (strcmp(state->symbols.entries[i].name, name) == 0) {
       if (entry) {
@@ -116,7 +124,11 @@ int find_symbol(converter_state_t *state, const char *name, symbol_entry_t *entr
 * @param defined Flag indicating whether the label is defined
 * @return Label ID on success, 0 on failure
 */
-uint16_t add_label(converter_state_t *state, const char *name, bool defined) {
+static uint16_t add_label(converter_state_t *state, const char *name, bool defined) {
+  if (!state || !name) {
+    return 0;
+  }
+
   // Check if label already exists
   for (size_t i = 0; i < state->labels.count; i++) {
     if (strcmp(state->labels.entries[i].name, name) == 0) {
@@ -157,7 +169,11 @@ uint16_t add_label(converter_state_t *state, const char *name, bool defined) {
 * @param name Label name
 * @return Label ID on success, 0 if not found
 */
-uint16_t find_label(converter_state_t *state, const char *name) {
+static uint16_t find_label(converter_state_t *state, const char *name) {
+  if (!state || !name) {
+    return 0;
+  }
+
   for (size_t i = 0; i < state->labels.count; i++) {
     if (strcmp(state->labels.entries[i].name, name) == 0) {
       return state->labels.entries[i].id;
@@ -173,7 +189,11 @@ uint16_t find_label(converter_state_t *state, const char *name) {
 * @param state Pointer to the converter state
 * @return 0 if all labels are defined, non-zero otherwise
 */
-int check_undefined_labels(converter_state_t *state) {
+static int check_undefined_labels(converter_state_t *state) {
+  if (!state) {
+    return -1;
+  }
+
   int undefined_count = 0;
   
   for (size_t i = 0; i < state->labels.count; i++) {
@@ -195,6 +215,10 @@ int check_undefined_labels(converter_state_t *state) {
 * @return Number of tokens parsed
 */
 int tokenize_hoil_line(char *line, char **tokens, int max_tokens) {
+  if (!line || !tokens || max_tokens <= 0) {
+    return 0;
+  }
+
   int count = 0;
   char *token = strtok(line, " ,\t\n");
   
@@ -218,6 +242,10 @@ int tokenize_hoil_line(char *line, char **tokens, int max_tokens) {
 * @return COIL type code
 */
 mem_type_t hoil_type_to_coil_type(const char *type_str) {
+  if (!type_str) {
+    return 0;
+  }
+
   if (strcmp(type_str, "dint") == 0) {
     return MEM_INT64;
   } else if (strcmp(type_str, "int8") == 0) {
@@ -255,7 +283,15 @@ mem_type_t hoil_type_to_coil_type(const char *type_str) {
 * @return Numeric value
 */
 int64_t convert_immediate_value(const char *value_str) {
+  if (!value_str) {
+    return 0;
+  }
+
   if (strncmp(value_str, "id", 2) == 0) {
+    // Handle character literal (e.g., id'A)
+    if (value_str[2] == '\'' && value_str[3] != '\0') {
+      return (int64_t)value_str[3];
+    }
     // Extract the numeric part of an "idX" format
     return atoll(value_str + 2);
   } else if (strcmp(value_str, "true") == 0) {
@@ -279,7 +315,11 @@ int64_t convert_immediate_value(const char *value_str) {
 * @param entry Pointer to store the symbol entry (if found)
 * @return Memory address
 */
-uint16_t resolve_identifier(converter_state_t *state, const char *id_str, symbol_entry_t *entry) {
+static uint16_t resolve_identifier(converter_state_t *state, const char *id_str, symbol_entry_t *entry) {
+  if (!state || !id_str) {
+    return 0;
+  }
+
   if (id_str[0] == '&') {
     // Remove the '&' prefix for address references
     const char *symbol_name = id_str + 1;
@@ -291,6 +331,7 @@ uint16_t resolve_identifier(converter_state_t *state, const char *id_str, symbol
       }
       return symbol.address;
     } else {
+      fprintf(stderr, "Symbol not found: %s\n", symbol_name);
       return 0;
     }
   } else if (isdigit(id_str[0])) {
@@ -306,6 +347,7 @@ uint16_t resolve_identifier(converter_state_t *state, const char *id_str, symbol
       }
       return symbol.address;
     } else {
+      fprintf(stderr, "Symbol not found: %s\n", id_str);
       return 0;
     }
   }
@@ -318,18 +360,27 @@ uint16_t resolve_identifier(converter_state_t *state, const char *id_str, symbol
 * @param instruction Binary instruction
 * @return 0 on success, non-zero on failure
 */
-int write_instruction(converter_state_t *state, binary_instruction_t *instruction) {
+static int write_instruction(converter_state_t *state, binary_instruction_t *instruction) {
+  if (!state || !instruction) {
+    return -1;
+  }
+
   if (state->binary_output) {
     // Write binary format
-    fwrite(&instruction->start_marker, sizeof(uint8_t), 1, state->output);
-    fwrite(&instruction->op_code, sizeof(uint16_t), 1, state->output);
-    fwrite(&instruction->type_marker, sizeof(uint8_t), 1, state->output);
-    fwrite(&instruction->type, sizeof(uint8_t), 1, state->output);
-    fwrite(&instruction->var_marker, sizeof(uint8_t), 1, state->output);
-    fwrite(&instruction->var_address, sizeof(uint16_t), 1, state->output);
-    fwrite(&instruction->imm_marker, sizeof(uint8_t), 1, state->output);
-    fwrite(&instruction->imm_value, sizeof(uint64_t), 1, state->output);
-    fwrite(&instruction->end_marker, sizeof(uint8_t), 1, state->output);
+    size_t bytes_written = 0;
+    bytes_written += fwrite(&instruction->start_marker, sizeof(uint8_t), 1, state->output);
+    bytes_written += fwrite(&instruction->op_code, sizeof(uint16_t), 1, state->output);
+    bytes_written += fwrite(&instruction->type_marker, sizeof(uint8_t), 1, state->output);
+    bytes_written += fwrite(&instruction->type, sizeof(uint8_t), 1, state->output);
+    bytes_written += fwrite(&instruction->var_marker, sizeof(uint8_t), 1, state->output);
+    bytes_written += fwrite(&instruction->var_address, sizeof(uint16_t), 1, state->output);
+    bytes_written += fwrite(&instruction->imm_marker, sizeof(uint8_t), 1, state->output);
+    bytes_written += fwrite(&instruction->imm_value, sizeof(uint64_t), 1, state->output);
+    bytes_written += fwrite(&instruction->end_marker, sizeof(uint8_t), 1, state->output);
+    
+    if (bytes_written != 9) { // 9 separate write operations
+      return -1;
+    }
   } else {
     // Write text format (hexadecimal representation)
     fprintf(state->output, "%04X %02X %04X %016llX\n", 
@@ -349,11 +400,15 @@ int write_instruction(converter_state_t *state, binary_instruction_t *instructio
 * @param var_address Variable address
 * @param imm_value Immediate value
 */
-void init_instruction(binary_instruction_t *instruction,
-                     uint16_t op_code,
-                     uint8_t type,
-                     uint16_t var_address,
-                     uint64_t imm_value) {
+static void init_instruction(binary_instruction_t *instruction,
+                    uint16_t op_code,
+                    uint8_t type,
+                    uint16_t var_address,
+                    uint64_t imm_value) {
+  if (!instruction) {
+    return;
+  }
+
   instruction->start_marker = MARKER_INSTRUCTION;
   instruction->op_code = op_code;
   instruction->type_marker = MARKER_TYPE;
@@ -373,15 +428,19 @@ void init_instruction(binary_instruction_t *instruction,
 * @param num_tokens Number of tokens
 * @return 0 on success, non-zero on failure
 */
-int convert_val_instruction(converter_state_t *state, char **tokens, int num_tokens) {
-  if (num_tokens < 4) {
-    fprintf(stderr, "VAL instruction requires at least 4 tokens\n");
+static int convert_val_instruction(converter_state_t *state, char **tokens, int num_tokens) {
+  if (!state || !tokens || num_tokens < 2) {
     return -1;
   }
-  
+
   binary_instruction_t instruction;
   
   if (strcmp(tokens[1], "DEFV") == 0) {
+    if (num_tokens < 5) {
+      fprintf(stderr, "DEFV requires at least 5 tokens: VAL DEFV <type>, <symbol>, <value>\n");
+      return -1;
+    }
+
     mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
       return -1;
@@ -401,6 +460,11 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     write_instruction(state, &instruction);
     
   } else if (strcmp(tokens[1], "MOVV") == 0) {
+    if (num_tokens < 5) {
+      fprintf(stderr, "MOVV requires at least 5 tokens: VAL MOVV <type>, <dest>, <source>\n");
+      return -1;
+    }
+
     mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
       return -1;
@@ -411,6 +475,10 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     
     // Resolve source symbol
     uint16_t src_addr = resolve_identifier(state, src_symbol, NULL);
+    if (src_addr == 0) {
+      fprintf(stderr, "Failed to resolve source symbol: %s\n", src_symbol);
+      return -1;
+    }
     
     // Allocate memory for the destination symbol if it doesn't exist
     uint16_t dest_addr = resolve_identifier(state, dest_symbol, NULL);
@@ -424,6 +492,11 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     init_instruction(&instruction, OP_ALLOC_MEM, type, dest_addr, src_addr);
     write_instruction(state, &instruction);
   } else if (strcmp(tokens[1], "LOAD") == 0) {
+    if (num_tokens < 5) {
+      fprintf(stderr, "LOAD requires at least 5 tokens: VAL LOAD <type>, <dest>, <addr>\n");
+      return -1;
+    }
+
     mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
       return -1;
@@ -434,6 +507,10 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     
     // Resolve address symbol
     uint16_t addr = resolve_identifier(state, addr_symbol, NULL);
+    if (addr == 0) {
+      fprintf(stderr, "Failed to resolve address symbol: %s\n", addr_symbol);
+      return -1;
+    }
     
     // Allocate memory for the destination symbol
     uint16_t dest_addr = state->next_address;
@@ -446,6 +523,11 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     write_instruction(state, &instruction);
     
   } else if (strcmp(tokens[1], "STORE") == 0) {
+    if (num_tokens < 5) {
+      fprintf(stderr, "STORE requires at least 5 tokens: VAL STORE <type>, <addr>, <source>\n");
+      return -1;
+    }
+
     mem_type_t type = hoil_type_to_coil_type(tokens[2]);
     if (type == 0) {
       return -1;
@@ -457,6 +539,11 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
     // Resolve address and source symbols
     uint16_t addr = resolve_identifier(state, addr_symbol, NULL);
     uint16_t src_addr = resolve_identifier(state, src_symbol, NULL);
+    
+    if (addr == 0 || src_addr == 0) {
+      fprintf(stderr, "Failed to resolve symbols: %s or %s\n", addr_symbol, src_symbol);
+      return -1;
+    }
     
     // Generate STORE instruction
     init_instruction(&instruction, OP_STORE, type, addr, src_addr);
@@ -478,12 +565,11 @@ int convert_val_instruction(converter_state_t *state, char **tokens, int num_tok
 * @param num_tokens Number of tokens
 * @return 0 on success, non-zero on failure
 */
-int convert_math_instruction(converter_state_t *state, char **tokens, int num_tokens) {
-  if (num_tokens < 3) {
-    fprintf(stderr, "MATH instruction requires at least 3 tokens\n");
+static int convert_math_instruction(converter_state_t *state, char **tokens, int num_tokens) {
+  if (!state || !tokens || num_tokens < 2) {
     return -1;
   }
-  
+
   binary_instruction_t instruction;
   uint16_t op_code;
   
@@ -505,8 +591,8 @@ int convert_math_instruction(converter_state_t *state, char **tokens, int num_to
   }
   
   if (op_code == OP_NEG) {
-    if (num_tokens < 3) {
-      fprintf(stderr, "NEG requires at least 3 tokens\n");
+    if (num_tokens < 4) {
+      fprintf(stderr, "NEG requires at least 3 tokens: MATH NEG <dest>, <src>\n");
       return -1;
     }
     
@@ -515,6 +601,10 @@ int convert_math_instruction(converter_state_t *state, char **tokens, int num_to
     
     // Resolve source symbol
     uint16_t src_addr = resolve_identifier(state, src_symbol, NULL);
+    if (src_addr == 0) {
+      fprintf(stderr, "Failed to resolve source symbol: %s\n", src_symbol);
+      return -1;
+    }
     
     // Allocate memory for the destination symbol if it doesn't exist
     uint16_t dest_addr;
@@ -533,7 +623,8 @@ int convert_math_instruction(converter_state_t *state, char **tokens, int num_to
     
   } else {
     if (num_tokens < 5) {
-      fprintf(stderr, "%s requires at least 5 tokens\n", tokens[1]);
+      fprintf(stderr, "%s requires at least 5 tokens: MATH %s <dest>, <src1>, <src2>\n", 
+              tokens[1], tokens[1]);
       return -1;
     }
     
@@ -544,6 +635,11 @@ int convert_math_instruction(converter_state_t *state, char **tokens, int num_to
     // Resolve source symbols
     uint16_t src_addr1 = resolve_identifier(state, src_symbol1, NULL);
     uint16_t src_addr2 = resolve_identifier(state, src_symbol2, NULL);
+    
+    if (src_addr1 == 0 || src_addr2 == 0) {
+      fprintf(stderr, "Failed to resolve symbols: %s or %s\n", src_symbol1, src_symbol2);
+      return -1;
+    }
     
     // Allocate memory for the destination symbol if it doesn't exist
     uint16_t dest_addr;
@@ -575,12 +671,11 @@ int convert_math_instruction(converter_state_t *state, char **tokens, int num_to
 * @param num_tokens Number of tokens
 * @return 0 on success, non-zero on failure
 */
-int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tokens) {
-  if (num_tokens < 3) {
-    fprintf(stderr, "BIT instruction requires at least 3 tokens\n");
+static int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tokens) {
+  if (!state || !tokens || num_tokens < 2) {
     return -1;
   }
-  
+
   binary_instruction_t instruction;
   uint16_t op_code;
   
@@ -602,8 +697,8 @@ int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tok
   }
   
   if (op_code == OP_NOT) {
-    if (num_tokens < 3) {
-      fprintf(stderr, "NOT requires at least 3 tokens\n");
+    if (num_tokens < 4) {
+      fprintf(stderr, "NOT requires at least 3 tokens: BIT NOT <dest>, <src>\n");
       return -1;
     }
     
@@ -612,6 +707,10 @@ int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tok
     
     // Resolve source symbol
     uint16_t src_addr = resolve_identifier(state, src_symbol, NULL);
+    if (src_addr == 0) {
+      fprintf(stderr, "Failed to resolve source symbol: %s\n", src_symbol);
+      return -1;
+    }
     
     // Allocate memory for the destination symbol if it doesn't exist
     uint16_t dest_addr;
@@ -629,8 +728,9 @@ int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tok
     write_instruction(state, &instruction);
     
   } else if (op_code == OP_SHL || op_code == OP_SHR) {
-    if (num_tokens < 4) {
-      fprintf(stderr, "%s requires at least 4 tokens\n", tokens[1]);
+    if (num_tokens < 5) {
+      fprintf(stderr, "%s requires at least 4 tokens: BIT %s <dest>, <src>, <shift>\n", 
+              tokens[1], tokens[1]);
       return -1;
     }
     
@@ -640,6 +740,10 @@ int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tok
     
     // Resolve source symbol
     uint16_t src_addr = resolve_identifier(state, src_symbol, NULL);
+    if (src_addr == 0) {
+      fprintf(stderr, "Failed to resolve source symbol: %s\n", src_symbol);
+      return -1;
+    }
     
     // Allocate memory for the destination symbol if it doesn't exist
     uint16_t dest_addr;
@@ -661,7 +765,8 @@ int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tok
     
   } else {
     if (num_tokens < 5) {
-      fprintf(stderr, "%s requires at least 5 tokens\n", tokens[1]);
+      fprintf(stderr, "%s requires at least 5 tokens: BIT %s <dest>, <src1>, <src2>\n", 
+              tokens[1], tokens[1]);
       return -1;
     }
     
@@ -672,6 +777,11 @@ int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tok
     // Resolve source symbols
     uint16_t src_addr1 = resolve_identifier(state, src_symbol1, NULL);
     uint16_t src_addr2 = resolve_identifier(state, src_symbol2, NULL);
+    
+    if (src_addr1 == 0 || src_addr2 == 0) {
+      fprintf(stderr, "Failed to resolve symbols: %s or %s\n", src_symbol1, src_symbol2);
+      return -1;
+    }
     
     // Allocate memory for the destination symbol if it doesn't exist
     uint16_t dest_addr;
@@ -703,17 +813,16 @@ int convert_bit_instruction(converter_state_t *state, char **tokens, int num_tok
 * @param num_tokens Number of tokens
 * @return 0 on success, non-zero on failure
 */
-int convert_cf_instruction(converter_state_t *state, char **tokens, int num_tokens) {
-  if (num_tokens < 2) {
-    fprintf(stderr, "CF instruction requires at least 2 tokens\n");
+static int convert_cf_instruction(converter_state_t *state, char **tokens, int num_tokens) {
+  if (!state || !tokens || num_tokens < 2) {
     return -1;
   }
-  
+
   binary_instruction_t instruction;
   
   if (strcmp(tokens[1], "JMP") == 0) {
     if (num_tokens < 3) {
-      fprintf(stderr, "JMP requires a label\n");
+      fprintf(stderr, "JMP requires a label: CF JMP <label>\n");
       return -1;
     }
     
@@ -723,6 +832,10 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     if (label_id == 0) {
       // Forward reference, create the label
       label_id = add_label(state, label_name, false);
+      if (label_id == 0) {
+        fprintf(stderr, "Failed to create label: %s\n", label_name);
+        return -1;
+      }
     }
     
     // Generate JMP instruction
@@ -731,7 +844,8 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     
   } else if (strcmp(tokens[1], "JCOND") == 0) {
     if (num_tokens < 6) {
-      fprintf(stderr, "JCOND requires condition, operands, and label\n");
+      fprintf(stderr, "JCOND requires condition, operands, and label: "
+              "CF JCOND <cond>, <src1>, <src2>, <label>\n");
       return -1;
     }
     
@@ -762,18 +876,27 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     uint16_t src_addr1 = resolve_identifier(state, src_symbol1, NULL);
     uint16_t src_addr2 = resolve_identifier(state, src_symbol2, NULL);
     
+    if (src_addr1 == 0 || src_addr2 == 0) {
+      fprintf(stderr, "Failed to resolve symbols: %s or %s\n", src_symbol1, src_symbol2);
+      return -1;
+    }
+    
     // Find or create the label
     uint16_t label_id = find_label(state, label_name);
     
     if (label_id == 0) {
       // Forward reference, create the label
       label_id = add_label(state, label_name, false);
+      if (label_id == 0) {
+        fprintf(stderr, "Failed to create label: %s\n", label_name);
+        return -1;
+      }
     }
     
     // Pack source addresses and label ID into immediate value
     uint64_t imm_value = ((uint64_t)src_addr1 << 48) | 
-                         ((uint64_t)src_addr2 << 32) | 
-                         label_id;
+                        ((uint64_t)src_addr2 << 32) | 
+                        label_id;
     
     // Generate conditional jump instruction
     init_instruction(&instruction, op_code, 0, 0, imm_value);
@@ -781,7 +904,7 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     
   } else if (strcmp(tokens[1], "LABEL") == 0) {
     if (num_tokens < 3) {
-      fprintf(stderr, "LABEL requires a name\n");
+      fprintf(stderr, "LABEL requires a name: CF LABEL <name>\n");
       return -1;
     }
     
@@ -791,6 +914,10 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     if (label_id == 0) {
       // New label
       label_id = add_label(state, label_name, true);
+      if (label_id == 0) {
+        fprintf(stderr, "Failed to create label: %s\n", label_name);
+        return -1;
+      }
     } else {
       // Update existing label
       for (size_t i = 0; i < state->labels.count; i++) {
@@ -807,7 +934,7 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     
   } else if (strcmp(tokens[1], "CALL") == 0) {
     if (num_tokens < 3) {
-      fprintf(stderr, "CALL requires a function name\n");
+      fprintf(stderr, "CALL requires a function name: CF CALL <function>\n");
       return -1;
     }
     
@@ -817,6 +944,10 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     if (func_id == 0) {
       // Forward reference, create the label
       func_id = add_label(state, func_name, false);
+      if (func_id == 0) {
+        fprintf(stderr, "Failed to create label: %s\n", func_name);
+        return -1;
+      }
     }
     
     // Generate CALL instruction
@@ -830,7 +961,7 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     
   } else if (strcmp(tokens[1], "PUSH") == 0) {
     if (num_tokens < 3) {
-      fprintf(stderr, "PUSH requires a symbol\n");
+      fprintf(stderr, "PUSH requires a symbol: CF PUSH <symbol>\n");
       return -1;
     }
     
@@ -838,13 +969,18 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     symbol_entry_t symbol;
     uint16_t addr = resolve_identifier(state, symbol_name, &symbol);
     
+    if (addr == 0) {
+      fprintf(stderr, "Failed to resolve symbol: %s\n", symbol_name);
+      return -1;
+    }
+    
     // Generate PUSH instruction
     init_instruction(&instruction, OP_PUSH, symbol.type, addr, 0);
     write_instruction(state, &instruction);
     
   } else if (strcmp(tokens[1], "POP") == 0) {
     if (num_tokens < 3) {
-      fprintf(stderr, "POP requires a symbol\n");
+      fprintf(stderr, "POP requires a symbol: CF POP <symbol>\n");
       return -1;
     }
     
@@ -872,7 +1008,7 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     
   } else if (strcmp(tokens[1], "SYSC") == 0) {
     if (num_tokens < 3) {
-      fprintf(stderr, "SYSC requires a syscall number\n");
+      fprintf(stderr, "SYSC requires a syscall number: CF SYSC <number>, [args...]\n");
       return -1;
     }
     
@@ -913,6 +1049,10 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
           ((uint16_t*)&args_instruction.imm_value)[i-3] = get_type_size(type);
         } else {
           uint16_t arg = resolve_identifier(state, tokens[i], NULL);
+          if (arg == 0) {
+            fprintf(stderr, "Failed to resolve argument: %s\n", tokens[i]);
+            return -1;
+          }
           ((uint16_t*)&args_instruction.imm_value)[i-3] = arg;
         }
       }
@@ -922,7 +1062,7 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
     
   } else if (strcmp(tokens[1], "EXIT") == 0) {
     if (num_tokens < 3) {
-      fprintf(stderr, "EXIT requires a status code\n");
+      fprintf(stderr, "EXIT requires a status code: CF EXIT <status>\n");
       return -1;
     }
     
@@ -948,7 +1088,11 @@ int convert_cf_instruction(converter_state_t *state, char **tokens, int num_toke
 * @param num_tokens Number of tokens
 * @return 0 on success, non-zero on failure
 */
-int convert_instruction(converter_state_t *state, char **tokens, int num_tokens) {
+static int convert_instruction(converter_state_t *state, char **tokens, int num_tokens) {
+  if (!state || !tokens) {
+    return -1;
+  }
+
   if (num_tokens < 1) {
     return 0; // Empty line
   }
@@ -962,7 +1106,7 @@ int convert_instruction(converter_state_t *state, char **tokens, int num_tokens)
   } else if (strcmp(tokens[0], "CF") == 0) {
     return convert_cf_instruction(state, tokens, num_tokens);
   } else {
-    fprintf(stderr, "Unknown instruction: %s\n", tokens[0]);
+    fprintf(stderr, "Unknown instruction category: %s\n", tokens[0]);
     return -1;
   }
 }
@@ -975,7 +1119,11 @@ int convert_instruction(converter_state_t *state, char **tokens, int num_tokens)
 * @param binary_output Flag for binary output format
 * @return 0 on success, non-zero on failure
 */
-int convert_hoil_to_coil(const char *input_filename, const char *output_filename, bool binary_output) {
+static int convert_hoil_to_coil(const char *input_filename, const char *output_filename, bool binary_output) {
+  if (!input_filename || !output_filename) {
+    return -1;
+  }
+
   FILE *input = fopen(input_filename, "r");
   if (!input) {
     perror("Failed to open input file");
@@ -1011,13 +1159,14 @@ int convert_hoil_to_coil(const char *input_filename, const char *output_filename
     line_num++;
     
     // Skip comments and empty lines
-    if (line[0] == ';' || line[0] == '\n') {
+    if (line[0] == ';' || line[0] == '\n' || line[0] == '\r') {
       continue;
     }
     
     // Make a copy of the line for tokenization
     char line_copy[MAX_HOIL_LINE_LENGTH];
-    strncpy(line_copy, line, sizeof(line_copy));
+    strncpy(line_copy, line, sizeof(line_copy) - 1);
+    line_copy[sizeof(line_copy) - 1] = '\0';
     
     // Tokenize the line
     char *tokens[MAX_HOIL_TOKENS];
@@ -1059,8 +1208,8 @@ int main(int argc, char *argv[]) {
   }
   
   bool binary_output = false;
-  const char *input_filename;
-  const char *output_filename;
+  const char *input_filename = NULL;
+  const char *output_filename = NULL;
   
   if (strcmp(argv[1], "-b") == 0) {
     if (argc < 4) {
