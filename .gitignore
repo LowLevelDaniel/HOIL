@@ -1,3 +1,82 @@
+# Build directories
 build/
-__*
+builddir/
+
+# Meson
+.mesonpy-native-file.ini
+
+# COIL binary files
+*.coil
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
 *.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Editor temporary/backup files
+*~
+.*.swp
+.*.swo
+\#*\#
+.\#*
+*.bak
+*.tmp
+*.sublime*
+.vscode/
+.idea/
+*.iml
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Generated documentation
+docs/
+html/
+latex/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Coverage reports
+coverage/
+*.gcda
+*.gcno
