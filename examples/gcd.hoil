@@ -17,8 +17,8 @@ FUNCTION gcd(a: i32, b: i32) -> i32 {
       
   LOOP:
     remainder = REM a, b;
-    a = b;
-    b = remainder;
+    a = ADD b, 0;
+    b = ADD remainder, 0;
     is_b_zero = CMP_EQ b, 0;
     BR is_b_zero, DONE, LOOP;
       

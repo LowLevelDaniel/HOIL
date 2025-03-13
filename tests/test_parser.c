@@ -84,8 +84,12 @@ static bool test_valid_function(void) {
     "FUNCTION add(a: i32, b: i32) -> i32 {\n"
     "    ENTRY:\n"
     "        result = ADD a, b;\n"
-    "        tmp = result;\n"
-    "        RET tmp;\n"
+    "        RET result;\n"
+    "}\n"
+    "FUNCTION sub(a: i32, b: i32) -> i32 {\n"
+    "    ENTRY:\n"
+    "        result = SUB a, b;\n"
+    "        RET result;\n"
     "}\n";
   
   return test_parse(source, true);
