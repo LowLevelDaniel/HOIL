@@ -33,143 +33,6 @@ struct parser_t {
 };
 
 /**
- * @brief Create a new parser instance
- * 
- * @param lexer Lexer instance to read tokens from
- * @return Pointer to created parser or NULL on failure
- */
-parser_t* parser_create(lexer_t* lexer) {
-  if (lexer == NULL) {
-    error_report(ERROR_INVALID_ARGUMENT, "Lexer cannot be NULL");
-    return NULL;
-  }
-  
-  parser_t* parser = (parser_t*)malloc(sizeof(parser_t));
-  if (parser == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for parser");
-    return NULL;
-  }
-  
-  parser->lexer = lexer;
-  parser->has_current_token = false;
-  parser->has_error = false;
-  
-  // Create symbol table
-  parser->symbols = symbol_table_create();
-  if (parser->symbols == NULL) {
-    error_report(ERROR_MEMORY, "Failed to create symbol table");
-    free(parser);
-    return NULL;
-  }
-  
-  // Initialize function context
-  parser->current_function = NULL;
-  parser->current_block = NULL;
-  
-  return parser;
-}
-
-/**
- * @brief Destroy a parser instance and free resources
- * 
- * @param parser Parser to destroy
- */
-void parser_destroy(parser_t* parser) {
-  if (parser == NULL) {
-    return;
-  }
-  
-  // Free token resources if needed
-  if (parser->has_current_token) {
-    if (parser->current_token.type == TOKEN_STRING) {
-      free(parser->current_token.string_value);
-    } else if (parser->current_token.type == TOKEN_IDENTIFIER) {
-      free(parser->current_token.identifier_value);
-    }
-  }
-  
-  // Destroy symbol table
-  if (parser->symbols != NULL) {
-    symbol_table_destroy(parser->symbols);
-  }
-  
-  free(parser);
-}
-
-/**
- * @brief Get the current line number
- * 
- * @param parser The parser instance
- * @return Current line number
- */
-size_t parser_line(const parser_t* parser) {
-  if (parser == NULL) {
-    return 0;
-  }
-  
-  if (parser->has_current_token) {
-    return parser->current_token.line;
-  }
-  
-  return lexer_line(parser->lexer);
-}
-
-/**
- * @brief Get the current column number
- * 
- * @param parser The parser instance
- * @return Current column number
- */
-size_t parser_column(const parser_t* parser) {
-  if (parser == NULL) {
-    return 0;
-  }
-  
-  if (parser->has_current_token) {
-    return parser->current_token.column;
-  }
-  
-  return lexer_column(parser->lexer);
-}
-
-/**
- * @brief Get the source filename
- * 
- * @param parser The parser instance
- * @return Source filename
- */
-const char* parser_filename(const parser_t* parser) {
-  if (parser == NULL) {
-    return "<unknown>";
-  }
-  
-  return lexer_filename(parser->lexer);
-}
-
-/**
- * @brief Report a syntax error at the current token
- * 
- * @param parser Parser instance
- * @param message Error message format string
- * @param ... Additional format arguments
- */
-static void syntax_error(parser_t* parser, const char* message, ...) {
-  char buffer[256];
-  va_list args;
-  va_start(args, message);
-  vsnprintf(buffer, sizeof(buffer), message, args);
-  va_end(args);
-  
-  error_report(ERROR_SYNTAX, "%s:%zu:%zu: %s", 
-               parser_filename(parser), 
-               parser_line(parser), 
-               parser_column(parser), 
-               buffer);
-  
-  parser->has_error = true;
-}
-
-/**
  * @brief Advance to the next token
  * 
  * @param parser Parser instance
@@ -193,6 +56,29 @@ static token_t advance(parser_t* parser) {
   }
   
   return parser->current_token;
+}
+
+/**
+ * @brief Report a syntax error at the current token
+ * 
+ * @param parser Parser instance
+ * @param message Error message format string
+ * @param ... Additional format arguments
+ */
+static void syntax_error(parser_t* parser, const char* message, ...) {
+  char buffer[256];
+  va_list args;
+  va_start(args, message);
+  vsnprintf(buffer, sizeof(buffer), message, args);
+  va_end(args);
+  
+  error_report(ERROR_SYNTAX, "%s:%zu:%zu: %s", 
+               parser_filename(parser), 
+               parser_line(parser), 
+               parser_column(parser), 
+               buffer);
+  
+  parser->has_error = true;
 }
 
 /**
@@ -279,6 +165,123 @@ static char* token_text(const token_t* token) {
   text[token->length] = '\0';
   
   return text;
+}
+
+/**
+ * @brief Create a new parser instance
+ * 
+ * @param lexer Lexer instance to read tokens from
+ * @return Pointer to created parser or NULL on failure
+ */
+ parser_t* parser_create(lexer_t* lexer) {
+  if (lexer == NULL) {
+    error_report(ERROR_INVALID_ARGUMENT, "Lexer cannot be NULL");
+    return NULL;
+  }
+  
+  parser_t* parser = (parser_t*)malloc(sizeof(parser_t));
+  if (parser == NULL) {
+    error_report(ERROR_MEMORY, "Failed to allocate memory for parser");
+    return NULL;
+  }
+  
+  parser->lexer = lexer;
+  parser->has_current_token = false;
+  parser->has_error = false;
+  
+  // Create symbol table
+  parser->symbols = symbol_table_create();
+  if (parser->symbols == NULL) {
+    error_report(ERROR_MEMORY, "Failed to create symbol table");
+    free(parser);
+    return NULL;
+  }
+  
+  // Initialize function context
+  parser->current_function = NULL;
+  parser->current_block = NULL;
+  
+  // Prime the parser by reading the first token
+  advance(parser);  // Add this line
+  
+  return parser;
+}
+
+/**
+ * @brief Destroy a parser instance and free resources
+ * 
+ * @param parser Parser to destroy
+ */
+void parser_destroy(parser_t* parser) {
+  if (parser == NULL) {
+    return;
+  }
+  
+  // Free token resources if needed
+  if (parser->has_current_token) {
+    if (parser->current_token.type == TOKEN_STRING) {
+      free(parser->current_token.string_value);
+    } else if (parser->current_token.type == TOKEN_IDENTIFIER) {
+      free(parser->current_token.identifier_value);
+    }
+  }
+  
+  // Destroy symbol table
+  if (parser->symbols != NULL) {
+    symbol_table_destroy(parser->symbols);
+  }
+  
+  free(parser);
+}
+
+/**
+ * @brief Get the current line number
+ * 
+ * @param parser The parser instance
+ * @return Current line number
+ */
+size_t parser_line(const parser_t* parser) {
+  if (parser == NULL) {
+    return 0;
+  }
+  
+  if (parser->has_current_token) {
+    return parser->current_token.line;
+  }
+  
+  return lexer_line(parser->lexer);
+}
+
+/**
+ * @brief Get the current column number
+ * 
+ * @param parser The parser instance
+ * @return Current column number
+ */
+size_t parser_column(const parser_t* parser) {
+  if (parser == NULL) {
+    return 0;
+  }
+  
+  if (parser->has_current_token) {
+    return parser->current_token.column;
+  }
+  
+  return lexer_column(parser->lexer);
+}
+
+/**
+ * @brief Get the source filename
+ * 
+ * @param parser The parser instance
+ * @return Source filename
+ */
+const char* parser_filename(const parser_t* parser) {
+  if (parser == NULL) {
+    return "<unknown>";
+  }
+  
+  return lexer_filename(parser->lexer);
 }
 
 /**

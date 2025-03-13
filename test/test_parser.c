@@ -76,7 +76,7 @@ int main() {
     },
     {
       "MODULE \"test\";\n"
-      "TYPE point { x: f32, y: f32 }\n",
+      "TYPE point { x: f32; y: f32; }\n",
       true,
       "Module with type definition"
     },

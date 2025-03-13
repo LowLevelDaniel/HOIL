@@ -8,9 +8,9 @@ TARGET {
 
 // Type definitions
 TYPE vector3 {
-  x: f32,
-  y: f32,
-  z: f32
+  x: f32;
+  y: f32;
+  z: f32;
 }
 
 // Constants
