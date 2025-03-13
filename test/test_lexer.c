@@ -22,7 +22,7 @@
  */
 typedef struct {
   const char* input;                /**< Input string */
-  token_type_t expected_types[16];  /**< Expected token types (terminated with TOKEN_EOF) */
+  token_type_t expected_types[32];  /**< Expected token types (terminated with TOKEN_EOF) */
   const char* description;          /**< Test description */
 } lexer_test_t;
 
@@ -47,7 +47,7 @@ int main() {
       {
         TOKEN_FUNCTION, TOKEN_IDENTIFIER, TOKEN_LPAREN, TOKEN_IDENTIFIER, TOKEN_COLON, 
         TOKEN_IDENTIFIER, TOKEN_COMMA, TOKEN_IDENTIFIER, TOKEN_COLON, TOKEN_IDENTIFIER, 
-        TOKEN_RPAREN, TOKEN_ARROW, TOKEN_IDENTIFIER, TOKEN_LBRACE, TOKEN_IDENTIFIER, 
+        TOKEN_RPAREN, TOKEN_ARROW, TOKEN_IDENTIFIER, TOKEN_LBRACE, TOKEN_ENTRY, 
         TOKEN_COLON, TOKEN_IDENTIFIER, TOKEN_EQUALS, TOKEN_ADD, TOKEN_IDENTIFIER, 
         TOKEN_COMMA, TOKEN_IDENTIFIER, TOKEN_SEMICOLON, TOKEN_RET, TOKEN_IDENTIFIER, 
         TOKEN_SEMICOLON, TOKEN_RBRACE, TOKEN_EOF

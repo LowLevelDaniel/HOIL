@@ -519,6 +519,65 @@ static ast_constant_t* parse_constant_expression(parser_t* parser, ast_type_t* t
   if (constant == NULL) {
     return NULL;
   }
+
+  // Add handling for structure initializers
+  if (token.type == TOKEN_LBRACE && type_is_struct(type)) {
+    advance(parser); // Consume '{'
+    
+    // Set up for structure constant
+    constant->value_type = CONSTANT_STRUCT;
+    
+    // Get structure definition
+    ast_type_def_t* struct_def = type->structure.def;
+    if (struct_def == NULL) {
+        syntax_error(parser, "Cannot initialize incomplete structure type");
+        ast_constant_destroy(constant);
+        return NULL;
+    }
+    
+    // Allocate space for field values
+    uint32_t field_count = struct_def->field_count;
+    constant->structure.field_count = field_count;
+    constant->structure.fields = (ast_constant_t**)malloc(field_count * sizeof(ast_constant_t*));
+    if (constant->structure.fields == NULL) {
+        error_report(ERROR_MEMORY, "Failed to allocate memory for structure fields");
+        ast_constant_destroy(constant);
+        return NULL;
+    }
+    
+    // Initialize all fields to NULL
+    for (uint32_t i = 0; i < field_count; i++) {
+        constant->structure.fields[i] = NULL;
+    }
+    
+    // Parse field values
+    for (uint32_t i = 0; i < field_count; i++) {
+        // Parse field value
+        ast_constant_t* field_value = parse_constant_expression(parser, struct_def->fields[i].type);
+        if (field_value == NULL) {
+            ast_constant_destroy(constant);
+            return NULL;
+        }
+        
+        constant->structure.fields[i] = field_value;
+        
+        // Check for comma or closing brace
+        if (i < field_count - 1) {
+            if (!expect(parser, TOKEN_COMMA, "Expected ',' between field values")) {
+                ast_constant_destroy(constant);
+                return NULL;
+            }
+        }
+    }
+    
+    // Expect closing brace
+    if (!expect(parser, TOKEN_RBRACE, "Expected '}' after structure initializer")) {
+        ast_constant_destroy(constant);
+        return NULL;
+    }
+    
+    return constant;
+  }
   
   switch (token.type) {
     case TOKEN_NUMBER:

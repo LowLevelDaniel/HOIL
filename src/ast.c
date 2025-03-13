@@ -85,26 +85,45 @@ void ast_module_destroy(ast_module_t* module) {
   }
   
   // Free module name
-  free((void*)module->name);
-  
-  // Free types
-  for (uint32_t i = 0; i < module->type_count; i++) {
-    if (module->types[i] != NULL) {
-      free((void*)module->types[i]->name);
-      
-      // Free structure fields if present
-      if (module->types[i]->fields != NULL) {
-        for (uint32_t j = 0; j < module->types[i]->field_count; j++) {
-          free((void*)module->types[i]->fields[j].name);
-          ast_type_destroy(module->types[i]->fields[j].type);
-        }
-        free(module->types[i]->fields);
-      }
-      
-      free(module->types[i]);
-    }
+  if (module->name != NULL) {
+    free((void*)module->name);
+    module->name = NULL;
   }
-  free(module->types);
+
+  // Free types
+  if (module->types != NULL) {
+    for (uint32_t i = 0; i < module->type_count; i++) {
+      if (module->types[i] != NULL) {
+          // Free type name
+          if (module->types[i]->name != NULL) {
+            free((void*)module->types[i]->name);
+          }
+          
+          // Free structure fields if present
+          if (module->types[i]->fields != NULL) {
+            for (uint32_t j = 0; j < module->types[i]->field_count; j++) {
+              if (module->types[i]->fields[j].name != NULL) {
+                free((void*)module->types[i]->fields[j].name);
+              }
+              if (module->types[i]->fields[j].type != NULL) {
+                ast_type_destroy(module->types[i]->fields[j].type);
+              }
+            }
+            free(module->types[i]->fields);
+          }
+          
+          // Check if structure name needs to be freed
+          if (module->types[i]->type.category == TYPE_STRUCTURE && 
+            module->types[i]->type.structure.name != NULL &&
+            module->types[i]->type.structure.name != module->types[i]->name) {
+            free((void*)module->types[i]->type.structure.name);
+          }
+          free(module->types[i]);
+        }
+    }
+    free(module->types);
+    module->types = NULL;
+  }
   
   // Free globals
   for (uint32_t i = 0; i < module->global_count; i++) {
