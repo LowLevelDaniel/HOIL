@@ -1354,12 +1354,18 @@ static ast_node_t* parse_block(parser_t* parser) {
                   parser->filename);
   
   /* Parse statements until the next block or end of function */
-  while (!parser_check(parser, TOKEN_IDENTIFIER) || 
-         !lexer_peek_token(parser->lexer, &parser->current) || 
-         parser->current.type != TOKEN_COLON) {
+  while (true) {
     /* Check for end of function */
     if (parser_check(parser, TOKEN_RBRACE)) {
       break;
+    }
+    
+    /* Check if this is the start of a new block (identifier followed by colon) */
+    if (parser_check(parser, TOKEN_IDENTIFIER)) {
+      token_t peek;
+      if (lexer_peek_token(parser->lexer, &peek) && peek.type == TOKEN_COLON) {
+        break;  /* Start of a new block, we're done with this one */
+      }
     }
     
     /* Parse a statement */
@@ -1420,17 +1426,21 @@ static ast_node_t* parse_statement(parser_t* parser) {
  * @return The parsed assignment statement AST node, or NULL on error.
  */
 static ast_node_t* parse_assignment(parser_t* parser) {
-  /* Expect target identifier */
-  if (!parser_expect(parser, TOKEN_IDENTIFIER, "Expected target identifier for assignment")) {
+  /* Check if the current token is an identifier */
+  if (!parser_check(parser, TOKEN_IDENTIFIER)) {
+    parser_set_error(parser, strdup("Expected target identifier for assignment"));
     return NULL;
   }
   
-  /* Get the target name */
+  /* Get the target name BEFORE consuming the token */
   char* target = token_to_str(&parser->current);
   if (target == NULL) {
     parser_set_error(parser, strdup("Memory allocation error for assignment target"));
     return NULL;
   }
+  
+  /* Advance past the identifier */
+  parser_advance(parser);
   
   /* Expect equals sign */
   if (!parser_expect(parser, TOKEN_EQUAL, "Expected '=' after assignment target")) {

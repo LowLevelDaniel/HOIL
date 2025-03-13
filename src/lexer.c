@@ -55,7 +55,7 @@ static const keyword_map_t keywords[] = {
   {"GLOBAL",   TOKEN_GLOBAL},
   {"EXTERN",   TOKEN_EXTERN},
   {"FUNCTION", TOKEN_FUNCTION},
-  {"ENTRY",    TOKEN_ENTRY},
+  // {"ENTRY",    TOKEN_ENTRY},
   {"void",     TOKEN_VOID},
   {"bool",     TOKEN_BOOL},
   {"i8",       TOKEN_I8},
