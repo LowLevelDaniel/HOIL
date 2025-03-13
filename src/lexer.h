@@ -15,6 +15,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stddef.h>
+
+/**
+ * @brief Maximum string size to prevent buffer overflow
+ */
+#define LEXER_MAX_STRING_SIZE (1024 * 1024)  // 1MB string limit
 
 /**
  * @brief Token types for HOIL language
@@ -166,11 +172,44 @@ size_t lexer_column(const lexer_t* lexer);
 const char* lexer_filename(const lexer_t* lexer);
 
 /**
+ * @brief Get if an error occurred during tokenization
+ * 
+ * @param lexer The lexer instance
+ * @return true if error occurred, false otherwise
+ */
+bool lexer_has_error(const lexer_t* lexer);
+
+/**
  * @brief Convert token type to string for debugging
  * 
  * @param type Token type
  * @return String representation of token type
  */
 const char* token_type_to_string(token_type_t type);
+
+/**
+ * @brief Create an invalid token with error message
+ *
+ * @param line Line number
+ * @param column Column number
+ * @param message Error message
+ * @return Error token
+ */
+token_t token_create_error(size_t line, size_t column, const char* message);
+
+/**
+ * @brief Copy a token
+ *
+ * @param token Token to copy
+ * @return Copy of token (caller must free with token_destroy)
+ */
+token_t token_copy(const token_t* token);
+
+/**
+ * @brief Free resources owned by a token
+ *
+ * @param token Token to clean up
+ */
+void token_destroy(token_t* token);
 
 #endif /* LEXER_H */

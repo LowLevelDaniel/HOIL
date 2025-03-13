@@ -11,9 +11,50 @@
 
 #include "ast.h"
 #include "error_handling.h"
+#include "common.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+
+/**
+ * @brief Reference counting functions
+ */
+
+/**
+ * @brief Initialize reference count for a node
+ * 
+ * @param ref_count Reference count to initialize
+ */
+static void ast_ref_count_init(ast_ref_count_t* ref_count) {
+  if (ref_count != NULL) {
+    ref_count->count = 1;
+  }
+}
+
+/**
+ * @brief Increment reference count for a node
+ * 
+ * @param ref_count Reference count to increment
+ */
+void ast_ref_count_inc(ast_ref_count_t* ref_count) {
+  if (ref_count != NULL) {
+    ref_count->count++;
+  }
+}
+
+/**
+ * @brief Decrement reference count for a node
+ * 
+ * @param ref_count Reference count to decrement
+ * @return New reference count
+ */
+uint32_t ast_ref_count_dec(ast_ref_count_t* ref_count) {
+  if (ref_count != NULL && ref_count->count > 0) {
+    ref_count->count--;
+    return ref_count->count;
+  }
+  return 0;
+}
 
 /**
  * @brief Helper function to duplicate a string
@@ -26,15 +67,7 @@ static char* strdup_safe(const char* str) {
     return NULL;
   }
   
-  size_t len = strlen(str);
-  char* dup = (char*)malloc(len + 1);
-  if (dup == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for string duplication");
-    return NULL;
-  }
-  
-  memcpy(dup, str, len + 1);
-  return dup;
+  return safe_strdup(str);
 }
 
 /**
@@ -49,14 +82,17 @@ ast_module_t* ast_module_create(const char* name) {
     return NULL;
   }
   
-  ast_module_t* module = (ast_module_t*)malloc(sizeof(ast_module_t));
+  ast_module_t* module = (ast_module_t*)safe_malloc(sizeof(ast_module_t));
   if (module == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for module");
     return NULL;
   }
   
+  ast_ref_count_init(&module->ref_count);
+  
   module->name = strdup_safe(name);
   if (module->name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate module name");
     free(module);
     return NULL;
   }
@@ -72,6 +108,30 @@ ast_module_t* ast_module_create(const char* name) {
   module->target = NULL;
   
   return module;
+}
+
+/**
+ * @brief Add a reference to a module
+ * 
+ * @param module Module to reference
+ * @return The same module
+ */
+ast_module_t* ast_module_ref(ast_module_t* module) {
+  if (module != NULL) {
+    ast_ref_count_inc(&module->ref_count);
+  }
+  return module;
+}
+
+/**
+ * @brief Remove a reference to a module
+ * 
+ * @param module Module to dereference
+ */
+void ast_module_unref(ast_module_t* module) {
+  if (module != NULL && ast_ref_count_dec(&module->ref_count) == 0) {
+    ast_module_destroy(module);
+  }
 }
 
 /**
@@ -94,58 +154,54 @@ void ast_module_destroy(ast_module_t* module) {
   if (module->types != NULL) {
     for (uint32_t i = 0; i < module->type_count; i++) {
       if (module->types[i] != NULL) {
-          // Free type name
-          if (module->types[i]->name != NULL) {
-            free((void*)module->types[i]->name);
-          }
-          
-          // Free structure fields if present
-          if (module->types[i]->fields != NULL) {
-            for (uint32_t j = 0; j < module->types[i]->field_count; j++) {
-              if (module->types[i]->fields[j].name != NULL) {
-                free((void*)module->types[i]->fields[j].name);
-              }
-              if (module->types[i]->fields[j].type != NULL) {
-                ast_type_destroy(module->types[i]->fields[j].type);
-              }
-            }
-            free(module->types[i]->fields);
-          }
-          
-          // Check if structure name needs to be freed
-          if (module->types[i]->type.category == TYPE_STRUCTURE && 
-            module->types[i]->type.structure.name != NULL &&
-            module->types[i]->type.structure.name != module->types[i]->name) {
-            free((void*)module->types[i]->type.structure.name);
-          }
-          free(module->types[i]);
-        }
+        ast_type_def_unref(module->types[i]);
+        module->types[i] = NULL;
+      }
     }
     free(module->types);
     module->types = NULL;
   }
   
   // Free globals
-  for (uint32_t i = 0; i < module->global_count; i++) {
-    ast_global_destroy(module->globals[i]);
+  if (module->globals != NULL) {
+    for (uint32_t i = 0; i < module->global_count; i++) {
+      if (module->globals[i] != NULL) {
+        ast_global_unref(module->globals[i]);
+        module->globals[i] = NULL;
+      }
+    }
+    free(module->globals);
+    module->globals = NULL;
   }
-  free(module->globals);
   
   // Free constants
-  for (uint32_t i = 0; i < module->constant_count; i++) {
-    ast_constant_destroy(module->constants[i]);
+  if (module->constants != NULL) {
+    for (uint32_t i = 0; i < module->constant_count; i++) {
+      if (module->constants[i] != NULL) {
+        ast_constant_unref(module->constants[i]);
+        module->constants[i] = NULL;
+      }
+    }
+    free(module->constants);
+    module->constants = NULL;
   }
-  free(module->constants);
   
   // Free functions
-  for (uint32_t i = 0; i < module->function_count; i++) {
-    ast_function_destroy(module->functions[i]);
+  if (module->functions != NULL) {
+    for (uint32_t i = 0; i < module->function_count; i++) {
+      if (module->functions[i] != NULL) {
+        ast_function_unref(module->functions[i]);
+        module->functions[i] = NULL;
+      }
+    }
+    free(module->functions);
+    module->functions = NULL;
   }
-  free(module->functions);
   
   // Free target
   if (module->target != NULL) {
-    ast_target_destroy(module->target);
+    ast_target_unref(module->target);
+    module->target = NULL;
   }
   
   free(module);
@@ -164,18 +220,22 @@ ast_type_def_t* ast_type_def_create(const char* name, type_category_t category) 
     return NULL;
   }
   
-  ast_type_def_t* type_def = (ast_type_def_t*)malloc(sizeof(ast_type_def_t));
+  ast_type_def_t* type_def = (ast_type_def_t*)safe_malloc(sizeof(ast_type_def_t));
   if (type_def == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for type definition");
     return NULL;
   }
   
+  ast_ref_count_init(&type_def->ref_count);
+  
   type_def->name = strdup_safe(name);
   if (type_def->name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate type name");
     free(type_def);
     return NULL;
   }
   
+  type_def->type.ref_count.count = 1;
   type_def->type.category = category;
   type_def->type.qualifier_flags = 0;
   
@@ -188,17 +248,68 @@ ast_type_def_t* ast_type_def_create(const char* name, type_category_t category) 
 }
 
 /**
+ * @brief Add a reference to a type definition
+ * 
+ * @param type_def Type definition to reference
+ * @return The same type definition
+ */
+ast_type_def_t* ast_type_def_ref(ast_type_def_t* type_def) {
+  if (type_def != NULL) {
+    ast_ref_count_inc(&type_def->ref_count);
+  }
+  return type_def;
+}
+
+/**
+ * @brief Remove a reference to a type definition
+ * 
+ * @param type_def Type definition to dereference
+ */
+void ast_type_def_unref(ast_type_def_t* type_def) {
+  if (type_def != NULL && ast_ref_count_dec(&type_def->ref_count) == 0) {
+    // Free type definition name
+    if (type_def->name != NULL) {
+      free((void*)type_def->name);
+    }
+    
+    // Free fields
+    if (type_def->fields != NULL) {
+      for (uint32_t i = 0; i < type_def->field_count; i++) {
+        if (type_def->fields[i].name != NULL) {
+          free((void*)type_def->fields[i].name);
+        }
+        if (type_def->fields[i].type != NULL) {
+          ast_type_unref(type_def->fields[i].type);
+        }
+      }
+      free(type_def->fields);
+    }
+    
+    // Free structure name if different from the typedef name
+    if (type_def->type.category == TYPE_STRUCTURE && 
+        type_def->type.structure.name != NULL &&
+        type_def->type.structure.name != type_def->name) {
+      free((void*)type_def->type.structure.name);
+    }
+    
+    free(type_def);
+  }
+}
+
+/**
  * @brief Create a new basic type
  * 
  * @param category Type category
  * @return New type or NULL on error
  */
 ast_type_t* ast_type_create(type_category_t category) {
-  ast_type_t* type = (ast_type_t*)malloc(sizeof(ast_type_t));
+  ast_type_t* type = (ast_type_t*)safe_malloc(sizeof(ast_type_t));
   if (type == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for type");
     return NULL;
   }
+  
+  ast_ref_count_init(&type->ref_count);
   
   type->category = category;
   type->qualifier_flags = 0;
@@ -248,6 +359,30 @@ ast_type_t* ast_type_create(type_category_t category) {
   }
   
   return type;
+}
+
+/**
+ * @brief Add a reference to a type
+ * 
+ * @param type Type to reference
+ * @return The same type
+ */
+ast_type_t* ast_type_ref(ast_type_t* type) {
+  if (type != NULL) {
+    ast_ref_count_inc(&type->ref_count);
+  }
+  return type;
+}
+
+/**
+ * @brief Remove a reference to a type
+ * 
+ * @param type Type to dereference
+ */
+void ast_type_unref(ast_type_t* type) {
+  if (type != NULL && ast_ref_count_dec(&type->ref_count) == 0) {
+    ast_type_destroy(type);
+  }
 }
 
 /**
@@ -320,15 +455,8 @@ ast_type_t* ast_type_create_pointer(ast_type_t* element_type, memory_space_t spa
     return NULL;
   }
   
-  // Make a copy of the element type
-  type->pointer.element_type = (ast_type_t*)malloc(sizeof(ast_type_t));
-  if (type->pointer.element_type == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for pointer element type");
-    free(type);
-    return NULL;
-  }
-  
-  memcpy(type->pointer.element_type, element_type, sizeof(ast_type_t));
+  // Reference the element type (don't copy it)
+  type->pointer.element_type = ast_type_ref(element_type);
   type->pointer.space = space;
   
   return type;
@@ -357,15 +485,8 @@ ast_type_t* ast_type_create_vector(ast_type_t* element_type, uint32_t element_co
     return NULL;
   }
   
-  // Make a copy of the element type
-  type->vector.element_type = (ast_type_t*)malloc(sizeof(ast_type_t));
-  if (type->vector.element_type == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for vector element type");
-    free(type);
-    return NULL;
-  }
-  
-  memcpy(type->vector.element_type, element_type, sizeof(ast_type_t));
+  // Reference the element type (don't copy it)
+  type->vector.element_type = ast_type_ref(element_type);
   type->vector.element_count = element_count;
   
   return type;
@@ -389,15 +510,8 @@ ast_type_t* ast_type_create_array(ast_type_t* element_type, uint32_t element_cou
     return NULL;
   }
   
-  // Make a copy of the element type
-  type->array.element_type = (ast_type_t*)malloc(sizeof(ast_type_t));
-  if (type->array.element_type == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for array element type");
-    free(type);
-    return NULL;
-  }
-  
-  memcpy(type->array.element_type, element_type, sizeof(ast_type_t));
+  // Reference the element type (don't copy it)
+  type->array.element_type = ast_type_ref(element_type);
   type->array.element_count = element_count;
   
   return type;
@@ -423,11 +537,17 @@ ast_type_t* ast_type_create_structure(const char* name, ast_type_def_t* def) {
   
   type->structure.name = strdup_safe(name);
   if (type->structure.name == NULL) {
-    free(type);
+    error_report(ERROR_MEMORY, "Failed to duplicate structure name");
+    ast_type_destroy(type);
     return NULL;
   }
   
-  type->structure.def = def;
+  // Reference the structure definition if provided
+  if (def != NULL) {
+    type->structure.def = ast_type_def_ref(def);
+  } else {
+    type->structure.def = NULL;
+  }
   
   return type;
 }
@@ -453,51 +573,27 @@ ast_type_t* ast_type_create_function(ast_type_t* return_type, ast_type_t** param
     return NULL;
   }
   
-  // Make a copy of the return type
-  type->function.return_type = (ast_type_t*)malloc(sizeof(ast_type_t));
-  if (type->function.return_type == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for function return type");
-    free(type);
-    return NULL;
-  }
+  // Reference the return type
+  type->function.return_type = ast_type_ref(return_type);
   
-  memcpy(type->function.return_type, return_type, sizeof(ast_type_t));
-  
-  // Make copies of parameter types if any
+  // Reference parameter types if any
   if (param_count > 0 && param_types != NULL) {
-    type->function.param_types = (ast_type_t**)malloc(param_count * sizeof(ast_type_t*));
+    type->function.param_types = (ast_type_t**)safe_calloc(param_count, sizeof(ast_type_t*));
     if (type->function.param_types == NULL) {
       error_report(ERROR_MEMORY, "Failed to allocate memory for function parameter types");
-      free(type->function.return_type);
-      free(type);
+      ast_type_destroy(type);
       return NULL;
     }
     
     for (uint32_t i = 0; i < param_count; i++) {
       if (param_types[i] == NULL) {
         error_report(ERROR_INVALID_ARGUMENT, "Parameter type %u cannot be NULL", i);
-        for (uint32_t j = 0; j < i; j++) {
-          free(type->function.param_types[j]);
-        }
-        free(type->function.param_types);
-        free(type->function.return_type);
-        free(type);
+        ast_type_destroy(type);
         return NULL;
       }
       
-      type->function.param_types[i] = (ast_type_t*)malloc(sizeof(ast_type_t));
-      if (type->function.param_types[i] == NULL) {
-        error_report(ERROR_MEMORY, "Failed to allocate memory for function parameter type %u", i);
-        for (uint32_t j = 0; j < i; j++) {
-          free(type->function.param_types[j]);
-        }
-        free(type->function.param_types);
-        free(type->function.return_type);
-        free(type);
-        return NULL;
-      }
-      
-      memcpy(type->function.param_types[i], param_types[i], sizeof(ast_type_t));
+      // Reference the parameter type
+      type->function.param_types[i] = ast_type_ref(param_types[i]);
     }
   } else {
     type->function.param_types = NULL;
@@ -510,11 +606,152 @@ ast_type_t* ast_type_create_function(ast_type_t* return_type, ast_type_t** param
 }
 
 /**
+ * @brief Clone a type (deep copy)
+ * 
+ * @param type Type to clone
+ * @return Cloned type or NULL on error
+ */
+ast_type_t* ast_type_clone(const ast_type_t* type) {
+  if (type == NULL) {
+    return NULL;
+  }
+  
+  ast_type_t* clone = (ast_type_t*)safe_malloc(sizeof(ast_type_t));
+  if (clone == NULL) {
+    error_report(ERROR_MEMORY, "Failed to allocate memory for type clone");
+    return NULL;
+  }
+  
+  // Initialize reference count
+  ast_ref_count_init(&clone->ref_count);
+  
+  // Copy basic fields
+  clone->category = type->category;
+  clone->qualifier_flags = type->qualifier_flags;
+  
+  // Copy category-specific fields
+  switch (type->category) {
+    case TYPE_VOID:
+    case TYPE_BOOLEAN:
+      // No additional fields to copy
+      break;
+      
+    case TYPE_INTEGER:
+      clone->integer.bit_width = type->integer.bit_width;
+      clone->integer.is_unsigned = type->integer.is_unsigned;
+      break;
+      
+    case TYPE_FLOAT:
+      clone->float_type.bit_width = type->float_type.bit_width;
+      break;
+      
+    case TYPE_POINTER:
+      if (type->pointer.element_type != NULL) {
+        clone->pointer.element_type = ast_type_clone(type->pointer.element_type);
+        if (clone->pointer.element_type == NULL) {
+          free(clone);
+          return NULL;
+        }
+      } else {
+        clone->pointer.element_type = NULL;
+      }
+      clone->pointer.space = type->pointer.space;
+      break;
+      
+    case TYPE_VECTOR:
+      if (type->vector.element_type != NULL) {
+        clone->vector.element_type = ast_type_clone(type->vector.element_type);
+        if (clone->vector.element_type == NULL) {
+          free(clone);
+          return NULL;
+        }
+      } else {
+        clone->vector.element_type = NULL;
+      }
+      clone->vector.element_count = type->vector.element_count;
+      break;
+      
+    case TYPE_ARRAY:
+      if (type->array.element_type != NULL) {
+        clone->array.element_type = ast_type_clone(type->array.element_type);
+        if (clone->array.element_type == NULL) {
+          free(clone);
+          return NULL;
+        }
+      } else {
+        clone->array.element_type = NULL;
+      }
+      clone->array.element_count = type->array.element_count;
+      break;
+      
+    case TYPE_STRUCTURE:
+      if (type->structure.name != NULL) {
+        clone->structure.name = strdup_safe(type->structure.name);
+        if (clone->structure.name == NULL) {
+          free(clone);
+          return NULL;
+        }
+      } else {
+        clone->structure.name = NULL;
+      }
+      
+      // Reference the structure definition (if any)
+      if (type->structure.def != NULL) {
+        clone->structure.def = ast_type_def_ref(type->structure.def);
+      } else {
+        clone->structure.def = NULL;
+      }
+      break;
+      
+    case TYPE_FUNCTION:
+      // Clone return type
+      if (type->function.return_type != NULL) {
+        clone->function.return_type = ast_type_clone(type->function.return_type);
+        if (clone->function.return_type == NULL) {
+          free(clone);
+          return NULL;
+        }
+      } else {
+        clone->function.return_type = NULL;
+      }
+      
+      // Clone parameter types
+      if (type->function.param_count > 0 && type->function.param_types != NULL) {
+        clone->function.param_types = (ast_type_t**)safe_calloc(
+            type->function.param_count, sizeof(ast_type_t*));
+        if (clone->function.param_types == NULL) {
+          ast_type_destroy(clone);
+          return NULL;
+        }
+        
+        for (uint32_t i = 0; i < type->function.param_count; i++) {
+          if (type->function.param_types[i] != NULL) {
+            clone->function.param_types[i] = ast_type_clone(type->function.param_types[i]);
+            if (clone->function.param_types[i] == NULL) {
+              ast_type_destroy(clone);
+              return NULL;
+            }
+          } else {
+            clone->function.param_types[i] = NULL;
+          }
+        }
+      } else {
+        clone->function.param_types = NULL;
+      }
+      
+      clone->function.param_count = type->function.param_count;
+      clone->function.is_vararg = type->function.is_vararg;
+      break;
+  }
+  
+  return clone;
+}
+/**
  * @brief Destroy a type
  * 
  * @param type Type to destroy
  */
-void ast_type_destroy(ast_type_t* type) {
+ void ast_type_destroy(ast_type_t* type) {
   if (type == NULL) {
     return;
   }
@@ -523,19 +760,19 @@ void ast_type_destroy(ast_type_t* type) {
   switch (type->category) {
     case TYPE_POINTER:
       if (type->pointer.element_type != NULL) {
-        ast_type_destroy(type->pointer.element_type);
+        ast_type_unref(type->pointer.element_type);
       }
       break;
       
     case TYPE_VECTOR:
       if (type->vector.element_type != NULL) {
-        ast_type_destroy(type->vector.element_type);
+        ast_type_unref(type->vector.element_type);
       }
       break;
       
     case TYPE_ARRAY:
       if (type->array.element_type != NULL) {
-        ast_type_destroy(type->array.element_type);
+        ast_type_unref(type->array.element_type);
       }
       break;
       
@@ -543,17 +780,20 @@ void ast_type_destroy(ast_type_t* type) {
       if (type->structure.name != NULL) {
         free((void*)type->structure.name);
       }
+      if (type->structure.def != NULL) {
+        ast_type_def_unref(type->structure.def);
+      }
       break;
       
     case TYPE_FUNCTION:
       if (type->function.return_type != NULL) {
-        ast_type_destroy(type->function.return_type);
+        ast_type_unref(type->function.return_type);
       }
       
       if (type->function.param_types != NULL) {
         for (uint32_t i = 0; i < type->function.param_count; i++) {
           if (type->function.param_types[i] != NULL) {
-            ast_type_destroy(type->function.param_types[i]);
+            ast_type_unref(type->function.param_types[i]);
           }
         }
         free(type->function.param_types);
@@ -586,28 +826,23 @@ ast_constant_t* ast_constant_create(const char* name, ast_type_t* type) {
     return NULL;
   }
   
-  ast_constant_t* constant = (ast_constant_t*)malloc(sizeof(ast_constant_t));
+  ast_constant_t* constant = (ast_constant_t*)safe_malloc(sizeof(ast_constant_t));
   if (constant == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for constant");
     return NULL;
   }
   
+  ast_ref_count_init(&constant->ref_count);
+  
   constant->name = strdup_safe(name);
   if (constant->name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate constant name");
     free(constant);
     return NULL;
   }
   
-  // Make a copy of the type
-  constant->type = (ast_type_t*)malloc(sizeof(ast_type_t));
-  if (constant->type == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for constant type");
-    free((void*)constant->name);
-    free(constant);
-    return NULL;
-  }
-  
-  memcpy(constant->type, type, sizeof(ast_type_t));
+  // Reference the type (don't copy it)
+  constant->type = ast_type_ref(type);
   
   // Default value type based on the type category
   switch (type->category) {
@@ -649,6 +884,145 @@ ast_constant_t* ast_constant_create(const char* name, ast_type_t* type) {
 }
 
 /**
+ * @brief Add a reference to a constant
+ * 
+ * @param constant Constant to reference
+ * @return The same constant
+ */
+ast_constant_t* ast_constant_ref(ast_constant_t* constant) {
+  if (constant != NULL) {
+    ast_ref_count_inc(&constant->ref_count);
+  }
+  return constant;
+}
+
+/**
+ * @brief Remove a reference to a constant
+ * 
+ * @param constant Constant to dereference
+ */
+void ast_constant_unref(ast_constant_t* constant) {
+  if (constant != NULL && ast_ref_count_dec(&constant->ref_count) == 0) {
+    ast_constant_destroy(constant);
+  }
+}
+
+/**
+ * @brief Clone a constant (deep copy)
+ * 
+ * @param constant Constant to clone
+ * @return Cloned constant or NULL on error
+ */
+ast_constant_t* ast_constant_clone(const ast_constant_t* constant) {
+  if (constant == NULL) {
+    return NULL;
+  }
+  
+  // Clone the constant's type
+  ast_type_t* type_clone = ast_type_clone(constant->type);
+  if (type_clone == NULL) {
+    return NULL;
+  }
+  
+  // Create a new constant with the cloned type
+  ast_constant_t* clone = ast_constant_create(constant->name, type_clone);
+  
+  // We can unref the type clone since ast_constant_create took a reference
+  ast_type_unref(type_clone);
+  
+  if (clone == NULL) {
+    return NULL;
+  }
+  
+  // Copy value type and value
+  clone->value_type = constant->value_type;
+  
+  switch (constant->value_type) {
+    case CONSTANT_INTEGER:
+      clone->int_value = constant->int_value;
+      break;
+      
+    case CONSTANT_FLOAT:
+      clone->float_value = constant->float_value;
+      break;
+      
+    case CONSTANT_BOOLEAN:
+      clone->bool_value = constant->bool_value;
+      break;
+      
+    case CONSTANT_STRING:
+      if (constant->string_value != NULL) {
+        clone->string_value = strdup_safe(constant->string_value);
+        if (clone->string_value == NULL) {
+          ast_constant_destroy(clone);
+          return NULL;
+        }
+      } else {
+        clone->string_value = NULL;
+      }
+      break;
+      
+    case CONSTANT_ARRAY:
+      if (constant->array.element_count > 0 && constant->array.elements != NULL) {
+        clone->array.elements = (ast_constant_t**)safe_calloc(
+            constant->array.element_count, sizeof(ast_constant_t*));
+        if (clone->array.elements == NULL) {
+          ast_constant_destroy(clone);
+          return NULL;
+        }
+        
+        clone->array.element_count = constant->array.element_count;
+        
+        for (uint32_t i = 0; i < constant->array.element_count; i++) {
+          if (constant->array.elements[i] != NULL) {
+            clone->array.elements[i] = ast_constant_clone(constant->array.elements[i]);
+            if (clone->array.elements[i] == NULL) {
+              ast_constant_destroy(clone);
+              return NULL;
+            }
+          } else {
+            clone->array.elements[i] = NULL;
+          }
+        }
+      } else {
+        clone->array.elements = NULL;
+        clone->array.element_count = 0;
+      }
+      break;
+      
+    case CONSTANT_STRUCT:
+      if (constant->structure.field_count > 0 && constant->structure.fields != NULL) {
+        clone->structure.fields = (ast_constant_t**)safe_calloc(
+            constant->structure.field_count, sizeof(ast_constant_t*));
+        if (clone->structure.fields == NULL) {
+          ast_constant_destroy(clone);
+          return NULL;
+        }
+        
+        clone->structure.field_count = constant->structure.field_count;
+        
+        for (uint32_t i = 0; i < constant->structure.field_count; i++) {
+          if (constant->structure.fields[i] != NULL) {
+            clone->structure.fields[i] = ast_constant_clone(constant->structure.fields[i]);
+            if (clone->structure.fields[i] == NULL) {
+              ast_constant_destroy(clone);
+              return NULL;
+            }
+          } else {
+            clone->structure.fields[i] = NULL;
+          }
+        }
+      } else {
+        clone->structure.fields = NULL;
+        clone->structure.field_count = 0;
+      }
+      break;
+  }
+  
+  return clone;
+}
+
+/**
  * @brief Destroy a constant
  * 
  * @param constant Constant to destroy
@@ -659,11 +1033,13 @@ void ast_constant_destroy(ast_constant_t* constant) {
   }
   
   // Free name
-  free((void*)constant->name);
+  if (constant->name != NULL) {
+    free((void*)constant->name);
+  }
   
-  // Free type
+  // Unref type
   if (constant->type != NULL) {
-    ast_type_destroy(constant->type);
+    ast_type_unref(constant->type);
   }
   
   // Free resources based on value type
@@ -678,7 +1054,7 @@ void ast_constant_destroy(ast_constant_t* constant) {
       if (constant->array.elements != NULL) {
         for (uint32_t i = 0; i < constant->array.element_count; i++) {
           if (constant->array.elements[i] != NULL) {
-            ast_constant_destroy(constant->array.elements[i]);
+            ast_constant_unref(constant->array.elements[i]);
           }
         }
         free(constant->array.elements);
@@ -689,7 +1065,7 @@ void ast_constant_destroy(ast_constant_t* constant) {
       if (constant->structure.fields != NULL) {
         for (uint32_t i = 0; i < constant->structure.field_count; i++) {
           if (constant->structure.fields[i] != NULL) {
-            ast_constant_destroy(constant->structure.fields[i]);
+            ast_constant_unref(constant->structure.fields[i]);
           }
         }
         free(constant->structure.fields);
@@ -722,33 +1098,52 @@ ast_global_t* ast_global_create(const char* name, ast_type_t* type) {
     return NULL;
   }
   
-  ast_global_t* global = (ast_global_t*)malloc(sizeof(ast_global_t));
+  ast_global_t* global = (ast_global_t*)safe_malloc(sizeof(ast_global_t));
   if (global == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for global");
     return NULL;
   }
   
+  ast_ref_count_init(&global->ref_count);
+  
   global->name = strdup_safe(name);
   if (global->name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate global name");
     free(global);
     return NULL;
   }
   
-  // Make a copy of the type
-  global->type = (ast_type_t*)malloc(sizeof(ast_type_t));
-  if (global->type == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for global type");
-    free((void*)global->name);
-    free(global);
-    return NULL;
-  }
-  
-  memcpy(global->type, type, sizeof(ast_type_t));
+  // Reference the type
+  global->type = ast_type_ref(type);
   
   global->has_initializer = false;
   global->initializer = NULL;
   
   return global;
+}
+
+/**
+ * @brief Add a reference to a global variable
+ * 
+ * @param global Global to reference
+ * @return The same global
+ */
+ast_global_t* ast_global_ref(ast_global_t* global) {
+  if (global != NULL) {
+    ast_ref_count_inc(&global->ref_count);
+  }
+  return global;
+}
+
+/**
+ * @brief Remove a reference to a global variable
+ * 
+ * @param global Global to dereference
+ */
+void ast_global_unref(ast_global_t* global) {
+  if (global != NULL && ast_ref_count_dec(&global->ref_count) == 0) {
+    ast_global_destroy(global);
+  }
 }
 
 /**
@@ -762,16 +1157,18 @@ void ast_global_destroy(ast_global_t* global) {
   }
   
   // Free name
-  free((void*)global->name);
-  
-  // Free type
-  if (global->type != NULL) {
-    ast_type_destroy(global->type);
+  if (global->name != NULL) {
+    free((void*)global->name);
   }
   
-  // Free initializer if present
+  // Unref type
+  if (global->type != NULL) {
+    ast_type_unref(global->type);
+  }
+  
+  // Unref initializer if present
   if (global->has_initializer && global->initializer != NULL) {
-    ast_constant_destroy(global->initializer);
+    ast_constant_unref(global->initializer);
   }
   
   free(global);
@@ -796,28 +1193,23 @@ ast_function_t* ast_function_create(const char* name, ast_type_t* return_type, b
     return NULL;
   }
   
-  ast_function_t* function = (ast_function_t*)malloc(sizeof(ast_function_t));
+  ast_function_t* function = (ast_function_t*)safe_malloc(sizeof(ast_function_t));
   if (function == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for function");
     return NULL;
   }
   
+  ast_ref_count_init(&function->ref_count);
+  
   function->name = strdup_safe(name);
   if (function->name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate function name");
     free(function);
     return NULL;
   }
   
-  // Make a copy of the return type
-  function->return_type = (ast_type_t*)malloc(sizeof(ast_type_t));
-  if (function->return_type == NULL) {
-    error_report(ERROR_MEMORY, "Failed to allocate memory for function return type");
-    free((void*)function->name);
-    free(function);
-    return NULL;
-  }
-  
-  memcpy(function->return_type, return_type, sizeof(ast_type_t));
+  // Reference the return type
+  function->return_type = ast_type_ref(return_type);
   
   function->parameters = NULL;
   function->parameter_count = 0;
@@ -831,6 +1223,30 @@ ast_function_t* ast_function_create(const char* name, ast_type_t* return_type, b
 }
 
 /**
+ * @brief Add a reference to a function
+ * 
+ * @param function Function to reference
+ * @return The same function
+ */
+ast_function_t* ast_function_ref(ast_function_t* function) {
+  if (function != NULL) {
+    ast_ref_count_inc(&function->ref_count);
+  }
+  return function;
+}
+
+/**
+ * @brief Remove a reference to a function
+ * 
+ * @param function Function to dereference
+ */
+void ast_function_unref(ast_function_t* function) {
+  if (function != NULL && ast_ref_count_dec(&function->ref_count) == 0) {
+    ast_function_destroy(function);
+  }
+}
+
+/**
  * @brief Destroy a function
  * 
  * @param function Function to destroy
@@ -841,37 +1257,41 @@ void ast_function_destroy(ast_function_t* function) {
   }
   
   // Free name
-  free((void*)function->name);
+  if (function->name != NULL) {
+    free((void*)function->name);
+  }
   
-  // Free return type
+  // Unref return type
   if (function->return_type != NULL) {
-    ast_type_destroy(function->return_type);
+    ast_type_unref(function->return_type);
   }
   
   // Free parameters
   if (function->parameters != NULL) {
     for (uint32_t i = 0; i < function->parameter_count; i++) {
-      free((void*)function->parameters[i].name);
+      if (function->parameters[i].name != NULL) {
+        free((void*)function->parameters[i].name);
+      }
       if (function->parameters[i].type != NULL) {
-        ast_type_destroy(function->parameters[i].type);
+        ast_type_unref(function->parameters[i].type);
       }
     }
     free(function->parameters);
   }
   
-  // Free basic blocks
+  // Unref basic blocks
   if (function->blocks != NULL) {
     for (uint32_t i = 0; i < function->block_count; i++) {
       if (function->blocks[i] != NULL) {
-        ast_basic_block_destroy(function->blocks[i]);
+        ast_basic_block_unref(function->blocks[i]);
       }
     }
     free(function->blocks);
   }
   
-  // Free target
+  // Unref target
   if (function->target != NULL) {
-    ast_target_destroy(function->target);
+    ast_target_unref(function->target);
   }
   
   free(function);
@@ -890,14 +1310,17 @@ ast_basic_block_t* ast_basic_block_create(const char* name, bool is_entry) {
     return NULL;
   }
   
-  ast_basic_block_t* block = (ast_basic_block_t*)malloc(sizeof(ast_basic_block_t));
+  ast_basic_block_t* block = (ast_basic_block_t*)safe_malloc(sizeof(ast_basic_block_t));
   if (block == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for basic block");
     return NULL;
   }
   
+  ast_ref_count_init(&block->ref_count);
+  
   block->name = strdup_safe(name);
   if (block->name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate block name");
     free(block);
     return NULL;
   }
@@ -907,6 +1330,30 @@ ast_basic_block_t* ast_basic_block_create(const char* name, bool is_entry) {
   block->is_entry = is_entry;
   
   return block;
+}
+
+/**
+ * @brief Add a reference to a basic block
+ * 
+ * @param block Basic block to reference
+ * @return The same basic block
+ */
+ast_basic_block_t* ast_basic_block_ref(ast_basic_block_t* block) {
+  if (block != NULL) {
+    ast_ref_count_inc(&block->ref_count);
+  }
+  return block;
+}
+
+/**
+ * @brief Remove a reference to a basic block
+ * 
+ * @param block Basic block to dereference
+ */
+void ast_basic_block_unref(ast_basic_block_t* block) {
+  if (block != NULL && ast_ref_count_dec(&block->ref_count) == 0) {
+    ast_basic_block_destroy(block);
+  }
 }
 
 /**
@@ -920,13 +1367,15 @@ void ast_basic_block_destroy(ast_basic_block_t* block) {
   }
   
   // Free name
-  free((void*)block->name);
+  if (block->name != NULL) {
+    free((void*)block->name);
+  }
   
-  // Free instructions
+  // Unref instructions
   if (block->instructions != NULL) {
     for (uint32_t i = 0; i < block->instruction_count; i++) {
       if (block->instructions[i] != NULL) {
-        ast_instruction_destroy(block->instructions[i]);
+        ast_instruction_unref(block->instructions[i]);
       }
     }
     free(block->instructions);
@@ -942,11 +1391,13 @@ void ast_basic_block_destroy(ast_basic_block_t* block) {
  * @return New instruction or NULL on error
  */
 ast_instruction_t* ast_instruction_create(opcode_t opcode) {
-  ast_instruction_t* instruction = (ast_instruction_t*)malloc(sizeof(ast_instruction_t));
+  ast_instruction_t* instruction = (ast_instruction_t*)safe_malloc(sizeof(ast_instruction_t));
   if (instruction == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for instruction");
     return NULL;
   }
+  
+  ast_ref_count_init(&instruction->ref_count);
   
   instruction->opcode = opcode;
   instruction->result = NULL;
@@ -969,6 +1420,30 @@ ast_instruction_t* ast_instruction_create(opcode_t opcode) {
 }
 
 /**
+ * @brief Add a reference to an instruction
+ * 
+ * @param instruction Instruction to reference
+ * @return The same instruction
+ */
+ast_instruction_t* ast_instruction_ref(ast_instruction_t* instruction) {
+  if (instruction != NULL) {
+    ast_ref_count_inc(&instruction->ref_count);
+  }
+  return instruction;
+}
+
+/**
+ * @brief Remove a reference to an instruction
+ * 
+ * @param instruction Instruction to dereference
+ */
+void ast_instruction_unref(ast_instruction_t* instruction) {
+  if (instruction != NULL && ast_ref_count_dec(&instruction->ref_count) == 0) {
+    ast_instruction_destroy(instruction);
+  }
+}
+
+/**
  * @brief Set instruction result
  * 
  * @param instruction Instruction to modify
@@ -981,12 +1456,13 @@ bool ast_instruction_set_result(ast_instruction_t* instruction, ast_operand_t* r
     return false;
   }
   
-  // Free previous result if any
+  // Unref previous result if any
   if (instruction->result != NULL) {
-    ast_operand_destroy(instruction->result);
+    ast_operand_unref(instruction->result);
   }
   
-  instruction->result = result;
+  // Reference the new result
+  instruction->result = result ? ast_operand_ref(result) : NULL;
   return true;
 }
 
@@ -1008,41 +1484,49 @@ bool ast_instruction_add_operand(ast_instruction_t* instruction, ast_operand_t* 
     return false;
   }
   
+  // Check for integer overflow
+  size_t new_count = instruction->operand_count + 1;
+  if (new_count > UINT32_MAX) {
+    error_report(ERROR_INVALID_ARGUMENT, "Too many operands");
+    return false;
+  }
+  
   // Expand operands array
-  ast_operand_t** new_operands = (ast_operand_t**)realloc(instruction->operands, 
-                                                        (instruction->operand_count + 1) * sizeof(ast_operand_t*));
+  ast_operand_t** new_operands = (ast_operand_t**)safe_reallocarray(
+      instruction->operands, new_count, sizeof(ast_operand_t*));
   if (new_operands == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for instruction operand");
     return false;
   }
   
   instruction->operands = new_operands;
-  instruction->operands[instruction->operand_count] = operand;
-  instruction->operand_count++;
+  
+  // Reference the operand and add to array
+  instruction->operands[instruction->operand_count] = ast_operand_ref(operand);
+  instruction->operand_count = (uint32_t)new_count;
   
   return true;
 }
-
 /**
  * @brief Destroy an instruction
  * 
  * @param instruction Instruction to destroy
  */
-void ast_instruction_destroy(ast_instruction_t* instruction) {
+ void ast_instruction_destroy(ast_instruction_t* instruction) {
   if (instruction == NULL) {
     return;
   }
   
-  // Free result operand if any
+  // Unref result operand if any
   if (instruction->result != NULL) {
-    ast_operand_destroy(instruction->result);
+    ast_operand_unref(instruction->result);
   }
   
-  // Free source operands
+  // Unref source operands
   if (instruction->operands != NULL) {
     for (uint32_t i = 0; i < instruction->operand_count; i++) {
       if (instruction->operands[i] != NULL) {
-        ast_operand_destroy(instruction->operands[i]);
+        ast_operand_unref(instruction->operands[i]);
       }
     }
     free(instruction->operands);
@@ -1050,7 +1534,15 @@ void ast_instruction_destroy(ast_instruction_t* instruction) {
   
   // Free opcode-specific fields
   if (instruction->opcode == OPCODE_CALL && instruction->call_info.return_type != NULL) {
-    ast_type_destroy(instruction->call_info.return_type);
+    ast_type_unref(instruction->call_info.return_type);
+  } else if (instruction->opcode == OPCODE_BR) {
+    // Free branch labels if owned
+    if (instruction->branch_info.true_label != NULL) {
+      free((void*)instruction->branch_info.true_label);
+    }
+    if (instruction->branch_info.false_label != NULL) {
+      free((void*)instruction->branch_info.false_label);
+    }
   }
   
   free(instruction);
@@ -1064,24 +1556,19 @@ void ast_instruction_destroy(ast_instruction_t* instruction) {
  * @return New operand or NULL on error
  */
 ast_operand_t* ast_operand_create(operand_type_t type, ast_type_t* value_type) {
-  ast_operand_t* operand = (ast_operand_t*)malloc(sizeof(ast_operand_t));
+  ast_operand_t* operand = (ast_operand_t*)safe_malloc(sizeof(ast_operand_t));
   if (operand == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for operand");
     return NULL;
   }
   
+  ast_ref_count_init(&operand->ref_count);
+  
   operand->type = type;
   
-  // Make a copy of the value type if provided
+  // Reference the value type if provided
   if (value_type != NULL) {
-    operand->value_type = (ast_type_t*)malloc(sizeof(ast_type_t));
-    if (operand->value_type == NULL) {
-      error_report(ERROR_MEMORY, "Failed to allocate memory for operand value type");
-      free(operand);
-      return NULL;
-    }
-    
-    memcpy(operand->value_type, value_type, sizeof(ast_type_t));
+    operand->value_type = ast_type_ref(value_type);
   } else {
     operand->value_type = NULL;
   }
@@ -1099,6 +1586,7 @@ ast_operand_t* ast_operand_create(operand_type_t type, ast_type_t* value_type) {
       
     case OPERAND_CONSTANT:
       operand->constant.constant = NULL;
+      operand->constant.owns_constant = false;
       break;
       
     case OPERAND_FUNCTION:
@@ -1115,6 +1603,30 @@ ast_operand_t* ast_operand_create(operand_type_t type, ast_type_t* value_type) {
   }
   
   return operand;
+}
+
+/**
+ * @brief Add a reference to an operand
+ * 
+ * @param operand Operand to reference
+ * @return The same operand
+ */
+ast_operand_t* ast_operand_ref(ast_operand_t* operand) {
+  if (operand != NULL) {
+    ast_ref_count_inc(&operand->ref_count);
+  }
+  return operand;
+}
+
+/**
+ * @brief Remove a reference to an operand
+ * 
+ * @param operand Operand to dereference
+ */
+void ast_operand_unref(ast_operand_t* operand) {
+  if (operand != NULL && ast_ref_count_dec(&operand->ref_count) == 0) {
+    ast_operand_destroy(operand);
+  }
 }
 
 /**
@@ -1142,6 +1654,7 @@ ast_operand_t* ast_operand_create_local(const char* name, ast_type_t* type) {
   
   operand->local.name = strdup_safe(name);
   if (operand->local.name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate local variable name");
     ast_operand_destroy(operand);
     return NULL;
   }
@@ -1174,6 +1687,7 @@ ast_operand_t* ast_operand_create_global(const char* name, ast_type_t* type) {
   
   operand->global.name = strdup_safe(name);
   if (operand->global.name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate global variable name");
     ast_operand_destroy(operand);
     return NULL;
   }
@@ -1185,9 +1699,10 @@ ast_operand_t* ast_operand_create_global(const char* name, ast_type_t* type) {
  * @brief Create a constant operand
  * 
  * @param constant Constant value
+ * @param take_ownership Whether to take ownership of the constant
  * @return New operand or NULL on error
  */
-ast_operand_t* ast_operand_create_constant(ast_constant_t* constant) {
+ast_operand_t* ast_operand_create_constant(ast_constant_t* constant, bool take_ownership) {
   if (constant == NULL) {
     error_report(ERROR_INVALID_ARGUMENT, "Constant cannot be NULL");
     return NULL;
@@ -1198,7 +1713,16 @@ ast_operand_t* ast_operand_create_constant(ast_constant_t* constant) {
     return NULL;
   }
   
-  operand->constant.constant = constant;
+  // Reference the constant
+  if (take_ownership) {
+    // Take ownership directly (no additional reference)
+    operand->constant.constant = constant;
+    operand->constant.owns_constant = true;
+  } else {
+    // Add a reference to the constant
+    operand->constant.constant = ast_constant_ref(constant);
+    operand->constant.owns_constant = false;
+  }
   
   return operand;
 }
@@ -1228,6 +1752,7 @@ ast_operand_t* ast_operand_create_function(const char* name, ast_type_t* type) {
   
   operand->function.name = strdup_safe(name);
   if (operand->function.name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate function name");
     ast_operand_destroy(operand);
     return NULL;
   }
@@ -1254,6 +1779,7 @@ ast_operand_t* ast_operand_create_block(const char* name) {
   
   operand->block.name = strdup_safe(name);
   if (operand->block.name == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate block name");
     ast_operand_destroy(operand);
     return NULL;
   }
@@ -1271,9 +1797,9 @@ void ast_operand_destroy(ast_operand_t* operand) {
     return;
   }
   
-  // Free value type if present
+  // Unref value type if present
   if (operand->value_type != NULL) {
-    ast_type_destroy(operand->value_type);
+    ast_type_unref(operand->value_type);
   }
   
   // Free resources based on operand type
@@ -1291,6 +1817,18 @@ void ast_operand_destroy(ast_operand_t* operand) {
       }
       break;
       
+    case OPERAND_CONSTANT:
+      if (operand->constant.constant != NULL) {
+        if (operand->constant.owns_constant) {
+          // Destroy the constant directly
+          ast_constant_destroy(operand->constant.constant);
+        } else {
+          // Unref the constant
+          ast_constant_unref(operand->constant.constant);
+        }
+      }
+      break;
+      
     case OPERAND_FUNCTION:
       if (operand->function.name != NULL) {
         free((void*)operand->function.name);
@@ -1301,10 +1839,6 @@ void ast_operand_destroy(ast_operand_t* operand) {
       if (operand->block.name != NULL) {
         free((void*)operand->block.name);
       }
-      break;
-      
-    case OPERAND_CONSTANT:
-      // We don't own the constant, so don't free it
       break;
       
     default:
@@ -1327,14 +1861,17 @@ ast_target_t* ast_target_create(const char* device_class) {
     return NULL;
   }
   
-  ast_target_t* target = (ast_target_t*)malloc(sizeof(ast_target_t));
+  ast_target_t* target = (ast_target_t*)safe_malloc(sizeof(ast_target_t));
   if (target == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for target");
     return NULL;
   }
   
+  ast_ref_count_init(&target->ref_count);
+  
   target->device_class = strdup_safe(device_class);
   if (target->device_class == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate device class name");
     free(target);
     return NULL;
   }
@@ -1345,6 +1882,30 @@ ast_target_t* ast_target_create(const char* device_class) {
   target->preferred_count = 0;
   
   return target;
+}
+
+/**
+ * @brief Add a reference to a target
+ * 
+ * @param target Target to reference
+ * @return The same target
+ */
+ast_target_t* ast_target_ref(ast_target_t* target) {
+  if (target != NULL) {
+    ast_ref_count_inc(&target->ref_count);
+  }
+  return target;
+}
+
+/**
+ * @brief Remove a reference to a target
+ * 
+ * @param target Target to dereference
+ */
+void ast_target_unref(ast_target_t* target) {
+  if (target != NULL && ast_ref_count_dec(&target->ref_count) == 0) {
+    ast_target_destroy(target);
+  }
 }
 
 /**
@@ -1365,9 +1926,15 @@ bool ast_target_add_required_feature(ast_target_t* target, const char* feature) 
     return false;
   }
   
+  // Check for integer overflow
+  if (target->required_count >= UINT32_MAX) {
+    error_report(ERROR_INVALID_ARGUMENT, "Too many required features");
+    return false;
+  }
+  
   // Expand required features array
-  const char** new_features = (const char**)realloc(target->required_features, 
-                                                  (target->required_count + 1) * sizeof(const char*));
+  const char** new_features = (const char**)safe_reallocarray(
+      (void*)target->required_features, target->required_count + 1, sizeof(const char*));
   if (new_features == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for target required feature");
     return false;
@@ -1378,6 +1945,7 @@ bool ast_target_add_required_feature(ast_target_t* target, const char* feature) 
   // Add the new feature
   target->required_features[target->required_count] = strdup_safe(feature);
   if (target->required_features[target->required_count] == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate feature name");
     return false;
   }
   
@@ -1404,9 +1972,15 @@ bool ast_target_add_preferred_feature(ast_target_t* target, const char* feature)
     return false;
   }
   
+  // Check for integer overflow
+  if (target->preferred_count >= UINT32_MAX) {
+    error_report(ERROR_INVALID_ARGUMENT, "Too many preferred features");
+    return false;
+  }
+  
   // Expand preferred features array
-  const char** new_features = (const char**)realloc(target->preferred_features, 
-                                                  (target->preferred_count + 1) * sizeof(const char*));
+  const char** new_features = (const char**)safe_reallocarray(
+      (void*)target->preferred_features, target->preferred_count + 1, sizeof(const char*));
   if (new_features == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate memory for target preferred feature");
     return false;
@@ -1417,6 +1991,7 @@ bool ast_target_add_preferred_feature(ast_target_t* target, const char* feature)
   // Add the new feature
   target->preferred_features[target->preferred_count] = strdup_safe(feature);
   if (target->preferred_features[target->preferred_count] == NULL) {
+    error_report(ERROR_MEMORY, "Failed to duplicate feature name");
     return false;
   }
   
@@ -1436,22 +2011,28 @@ void ast_target_destroy(ast_target_t* target) {
   }
   
   // Free device class
-  free((void*)target->device_class);
+  if (target->device_class != NULL) {
+    free((void*)target->device_class);
+  }
   
   // Free required features
   if (target->required_features != NULL) {
     for (uint32_t i = 0; i < target->required_count; i++) {
-      free((void*)target->required_features[i]);
+      if (target->required_features[i] != NULL) {
+        free((void*)target->required_features[i]);
+      }
     }
-    free(target->required_features);
+    free((void*)target->required_features);
   }
   
   // Free preferred features
   if (target->preferred_features != NULL) {
     for (uint32_t i = 0; i < target->preferred_count; i++) {
-      free((void*)target->preferred_features[i]);
+      if (target->preferred_features[i] != NULL) {
+        free((void*)target->preferred_features[i]);
+      }
     }
-    free(target->preferred_features);
+    free((void*)target->preferred_features);
   }
   
   free(target);

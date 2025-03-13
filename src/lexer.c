@@ -11,9 +11,17 @@
 
 #include "lexer.h"
 #include "error_handling.h"
+#include "common.h"
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
+#include <errno.h>
+#include <limits.h>
+
+/**
+ * @brief Maximum token length to prevent buffer overflow
+ */
+#define MAX_TOKEN_LENGTH (64 * 1024)  // 64KB token limit
 
 /**
  * @brief Lexer structure definition
@@ -29,6 +37,7 @@ struct lexer_t {
   
   token_t peeked_token;    /**< Token buffer for peek operations */
   bool has_peeked_token;   /**< Whether there's a buffered token */
+  bool has_error;          /**< Whether an error occurred */
 };
 
 /**
@@ -164,6 +173,127 @@ const char* token_type_to_string(token_type_t type) {
 }
 
 /**
+ * @brief Free resources owned by a token
+ *
+ * @param token Token to clean up
+ */
+void token_destroy(token_t* token) {
+  if (token == NULL) {
+    return;
+  }
+  
+  // Free owned resources based on token type
+  if (token->type == TOKEN_STRING && token->string_value != NULL) {
+    free(token->string_value);
+    token->string_value = NULL;
+  } else if (token->type == TOKEN_IDENTIFIER && token->identifier_value != NULL) {
+    free(token->identifier_value);
+    token->identifier_value = NULL;
+  }
+  
+  // Zero out the token to prevent double-free
+  token->type = TOKEN_ERROR;
+  token->start = NULL;
+  token->length = 0;
+}
+
+/**
+ * @brief Copy a token
+ *
+ * @param token Token to copy
+ * @return Copy of token (caller must free with token_destroy)
+ */
+token_t token_copy(const token_t* token) {
+  token_t copy;
+  
+  if (token == NULL) {
+    // Return an error token if input is NULL
+    copy.type = TOKEN_ERROR;
+    copy.start = NULL;
+    copy.length = 0;
+    copy.line = 0;
+    copy.column = 0;
+    copy.string_value = NULL;
+    return copy;
+  }
+  
+  // Copy basic fields
+  copy.type = token->type;
+  copy.start = token->start;
+  copy.length = token->length;
+  copy.line = token->line;
+  copy.column = token->column;
+  
+  // Copy type-specific data
+  switch (token->type) {
+    case TOKEN_STRING:
+      if (token->string_value != NULL) {
+        copy.string_value = safe_strdup(token->string_value);
+        if (copy.string_value == NULL) {
+          // Failed to allocate memory, return error token
+          error_report(ERROR_MEMORY, "Failed to allocate memory for string token copy");
+          copy.type = TOKEN_ERROR;
+        }
+      } else {
+        copy.string_value = NULL;
+      }
+      break;
+      
+    case TOKEN_IDENTIFIER:
+      if (token->identifier_value != NULL) {
+        copy.identifier_value = safe_strdup(token->identifier_value);
+        if (copy.identifier_value == NULL) {
+          // Failed to allocate memory, return error token
+          error_report(ERROR_MEMORY, "Failed to allocate memory for identifier token copy");
+          copy.type = TOKEN_ERROR;
+        }
+      } else {
+        copy.identifier_value = NULL;
+      }
+      break;
+      
+    case TOKEN_NUMBER:
+      copy.number_value = token->number_value;
+      break;
+      
+    default:
+      // No type-specific data for other token types
+      break;
+  }
+  
+  return copy;
+}
+
+/**
+ * @brief Create an invalid token with error message
+ *
+ * @param line Line number
+ * @param column Column number
+ * @param message Error message
+ * @return Error token
+ */
+token_t token_create_error(size_t line, size_t column, const char* message) {
+  token_t token;
+  token.type = TOKEN_ERROR;
+  token.start = NULL;
+  token.length = 0;
+  token.line = line;
+  token.column = column;
+  
+  // Store error message in string_value
+  if (message != NULL) {
+    token.string_value = safe_strdup(message);
+    if (token.string_value == NULL) {
+      error_report(ERROR_MEMORY, "Failed to allocate memory for error token message");
+    }
+  } else {
+    token.string_value = NULL;
+  }
+  
+  return token;
+}
+
+/**
  * @brief Create a new lexer instance
  * 
  * @param source Source code to tokenize
@@ -177,7 +307,14 @@ lexer_t* lexer_create(const char* source, size_t length, const char* filename) {
     return NULL;
   }
 
-  lexer_t* lexer = (lexer_t*)malloc(sizeof(lexer_t));
+  // Check for excessive source code size
+  if (length > LEXER_MAX_STRING_SIZE) {
+    error_report(ERROR_INVALID_ARGUMENT, "Source code exceeds maximum size limit (%zu > %d bytes)",
+                length, LEXER_MAX_STRING_SIZE);
+    return NULL;
+  }
+
+  lexer_t* lexer = (lexer_t*)safe_malloc(sizeof(lexer_t));
   if (lexer == NULL) {
     error_report(ERROR_MEMORY, "Failed to allocate lexer");
     return NULL;
@@ -190,6 +327,10 @@ lexer_t* lexer_create(const char* source, size_t length, const char* filename) {
   lexer->line = 1;
   lexer->column = 1;
   lexer->has_peeked_token = false;
+  lexer->has_error = false;
+
+  // Register cleanup function
+  error_register_cleanup((void (*)(void*))lexer_destroy, lexer);
 
   return lexer;
 }
@@ -206,11 +347,8 @@ void lexer_destroy(lexer_t* lexer) {
 
   // Free the peeked token if present and it owns resources
   if (lexer->has_peeked_token) {
-    if (lexer->peeked_token.type == TOKEN_STRING && lexer->peeked_token.string_value) {
-      free(lexer->peeked_token.string_value);
-    } else if (lexer->peeked_token.type == TOKEN_IDENTIFIER && lexer->peeked_token.identifier_value) {
-      free(lexer->peeked_token.identifier_value);
-    }
+    token_destroy(&lexer->peeked_token);
+    lexer->has_peeked_token = false;
   }
 
   free(lexer);
@@ -223,7 +361,16 @@ void lexer_destroy(lexer_t* lexer) {
  * @return true if at end, false otherwise
  */
 static bool is_at_end(const lexer_t* lexer) {
-  return (size_t)(lexer->current - lexer->source) >= lexer->source_length;
+  if (lexer == NULL || lexer->current == NULL || lexer->source == NULL) {
+    return true;
+  }
+  
+  ptrdiff_t diff = lexer->current - lexer->source;
+  if (diff < 0 || (size_t)diff >= lexer->source_length) {
+    return true;
+  }
+  
+  return false;
 }
 
 /**
@@ -246,9 +393,15 @@ static char peek(const lexer_t* lexer) {
  * @return The next character or '\0' if at end
  */
 static char peek_next(const lexer_t* lexer) {
-  if (is_at_end(lexer) || (size_t)(lexer->current - lexer->source + 1) >= lexer->source_length) {
+  if (is_at_end(lexer)) {
     return '\0';
   }
+  
+  ptrdiff_t diff = lexer->current - lexer->source + 1;
+  if (diff < 0 || (size_t)diff >= lexer->source_length) {
+    return '\0';
+  }
+  
   return lexer->current[1];
 }
 
@@ -330,7 +483,22 @@ static void skip_whitespace_and_comments(lexer_t* lexer) {
               advance(lexer); // Skip '/'
               break;
             }
+            
+            // Handle nested comments (not supported, just track depth)
+            if (peek(lexer) == '/' && peek_next(lexer) == '*') {
+              error_report_at(ERROR_LEXICAL, lexer->filename, lexer->line, lexer->column,
+                            "Nested block comments are not supported");
+              lexer->has_error = true;
+            }
+            
             advance(lexer);
+          }
+          
+          // Check if we reached the end without closing the comment
+          if (is_at_end(lexer)) {
+            error_report_at(ERROR_LEXICAL, lexer->filename, lexer->line, lexer->column,
+                          "Unterminated block comment");
+            lexer->has_error = true;
           }
         } else {
           // Not a comment
@@ -370,23 +538,47 @@ static token_t make_token(lexer_t* lexer, token_type_t type, const char* start, 
   token.length = length;
   token.line = lexer->line;
   token.column = lexer->column - length;
+  
+  // Check for token length overflow
+  if (length > MAX_TOKEN_LENGTH) {
+    error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                  "Token length exceeds maximum allowed (%zu > %d)",
+                  length, MAX_TOKEN_LENGTH);
+    token.type = TOKEN_ERROR;
+    token.string_value = NULL;
+    lexer->has_error = true;
+    return token;
+  }
 
   // For tokens that need special handling
   switch (type) {
     case TOKEN_STRING:
       {
+        // Check string length for overflow
+        if (length > 2 && length - 2 > LEXER_MAX_STRING_SIZE) {
+          error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                        "String is too long (%zu characters)",
+                        length - 2);
+          token.type = TOKEN_ERROR;
+          token.string_value = NULL;
+          lexer->has_error = true;
+          return token;
+        }
+        
         // Allocate and copy string value without quotes and with escape sequences processed
-        char* str = (char*)malloc(length - 1); // -2 for quotes, +1 for null terminator
+        size_t max_len = length > 2 ? length - 2 : 0;  // -2 for quotes
+        char* str = (char*)safe_malloc(max_len + 1);   // +1 for null terminator
         if (str == NULL) {
           error_report(ERROR_MEMORY, "Failed to allocate memory for string token");
           token.type = TOKEN_ERROR;
           token.string_value = NULL;
+          lexer->has_error = true;
           return token;
         }
         
         size_t j = 0;
         // Start after the opening quote, end before the closing quote
-        for (size_t i = 1; i < length - 1; i++) {
+        for (size_t i = 1; i < length - 1 && j < max_len; i++) {
           if (start[i] == '\\' && i + 1 < length - 1) {
             // Handle escape sequences
             i++;
@@ -397,29 +589,48 @@ static token_t make_token(lexer_t* lexer, token_type_t type, const char* start, 
               case '0': str[j++] = '\0'; break;
               case '"': str[j++] = '"'; break;
               case '\\': str[j++] = '\\'; break;
-              default: str[j++] = start[i]; break;
+              default: 
+                // Invalid escape sequence
+                error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column + i,
+                             "Invalid escape sequence '\\%c'", start[i]);
+                str[j++] = start[i]; 
+                break;
             }
           } else {
             str[j++] = start[i];
+          }
+          
+          // Check for buffer overflow
+          if (j >= max_len) {
+            // This should never happen due to our previous check, but just in case
+            error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                          "String buffer overflow");
+            token.type = TOKEN_ERROR;
+            free(str);
+            token.string_value = NULL;
+            lexer->has_error = true;
+            return token;
           }
         }
         str[j] = '\0';
         token.string_value = str;
       }
       break;
-      
-    case TOKEN_IDENTIFIER:
+      case TOKEN_IDENTIFIER:
       {
         // Allocate and copy identifier value
-        char* id = (char*)malloc(length + 1);
+        char* id = (char*)safe_malloc(length + 1);
         if (id == NULL) {
           error_report(ERROR_MEMORY, "Failed to allocate memory for identifier token");
           token.type = TOKEN_ERROR;
           token.identifier_value = NULL;
+          lexer->has_error = true;
           return token;
         }
         
-        memcpy(id, start, length);
+        if (length > 0) {
+          memcpy(id, start, length);
+        }
         id[length] = '\0';
         token.identifier_value = id;
       }
@@ -427,16 +638,30 @@ static token_t make_token(lexer_t* lexer, token_type_t type, const char* start, 
       
     case TOKEN_NUMBER:
       {
+        // Check for excessively long numbers
+        if (length > 100) {
+          error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                        "Number is too long (%zu digits)",
+                        length);
+          token.type = TOKEN_ERROR;
+          token.number_value = 0;
+          lexer->has_error = true;
+          return token;
+        }
+        
         // Parse number value
-        char* num_str = (char*)malloc(length + 1);
+        char* num_str = (char*)safe_malloc(length + 1);
         if (num_str == NULL) {
           error_report(ERROR_MEMORY, "Failed to allocate memory for number token");
           token.type = TOKEN_ERROR;
           token.number_value = 0;
+          lexer->has_error = true;
           return token;
         }
         
-        memcpy(num_str, start, length);
+        if (length > 0) {
+          memcpy(num_str, start, length);
+        }
         num_str[length] = '\0';
         
         // Determine base (decimal, hex, binary)
@@ -453,10 +678,73 @@ static token_t make_token(lexer_t* lexer, token_type_t type, const char* start, 
         
         // Handle floating point
         if (base == 10 && (strchr(num_str, '.') || strchr(num_str, 'e') || strchr(num_str, 'E'))) {
-          token.number_value = strtod(num_str, NULL);
+          // Reset errno before conversion
+          errno = 0;
+          
+          // Convert to double
+          char* endptr = NULL;
+          double value = strtod(num_str, &endptr);
+          
+          // Check for conversion errors
+          if (errno == ERANGE) {
+            if (value == 0) {
+              error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                           "Number underflow");
+            } else {
+              error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                           "Number overflow");
+            }
+            token.type = TOKEN_ERROR;
+            free(num_str);
+            token.number_value = 0;
+            lexer->has_error = true;
+            return token;
+          }
+          
+          // Check if the entire string was converted
+          if (endptr == num_str || *endptr != '\0') {
+            error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                         "Invalid floating-point number");
+            token.type = TOKEN_ERROR;
+            free(num_str);
+            token.number_value = 0;
+            lexer->has_error = true;
+            return token;
+          }
+          
+          token.number_value = value;
         } else {
           // Integer value
-          token.number_value = (double)strtoll(parse_start, NULL, base);
+          // Reset errno before conversion
+          errno = 0;
+          
+          // Convert to integer
+          char* endptr = NULL;
+          long long value = strtoll(parse_start, &endptr, base);
+          
+          // Check for conversion errors
+          if (errno == ERANGE) {
+            error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                         "Integer overflow");
+            token.type = TOKEN_ERROR;
+            free(num_str);
+            token.number_value = 0;
+            lexer->has_error = true;
+            return token;
+          }
+          
+          // Check if the entire string was converted
+          if (endptr == parse_start || *endptr != '\0') {
+            error_report_at(ERROR_LEXICAL, lexer->filename, token.line, token.column,
+                         "Invalid integer");
+            token.type = TOKEN_ERROR;
+            free(num_str);
+            token.number_value = 0;
+            lexer->has_error = true;
+            return token;
+          }
+          
+          token.number_value = (double)value;
         }
         
         free(num_str);
@@ -479,8 +767,8 @@ static token_t make_token(lexer_t* lexer, token_type_t type, const char* start, 
  * @return The error token
  */
 static token_t error_token(lexer_t* lexer, const char* message) {
-  error_report(ERROR_LEXICAL, "%s:%zu:%zu: %s", 
-               lexer->filename, lexer->line, lexer->column, message);
+  error_report_at(ERROR_LEXICAL, lexer->filename, lexer->line, lexer->column, "%s", message);
+  lexer->has_error = true;
                
   token_t token;
   token.type = TOKEN_ERROR;
@@ -488,6 +776,17 @@ static token_t error_token(lexer_t* lexer, const char* message) {
   token.length = 0;
   token.line = lexer->line;
   token.column = lexer->column;
+  
+  // Store error message
+  if (message != NULL) {
+    token.string_value = safe_strdup(message);
+    if (token.string_value == NULL) {
+      error_report(ERROR_MEMORY, "Failed to allocate memory for error message");
+    }
+  } else {
+    token.string_value = NULL;
+  }
+  
   return token;
 }
 
@@ -499,16 +798,23 @@ static token_t error_token(lexer_t* lexer, const char* message) {
  */
 static token_t scan_identifier(lexer_t* lexer) {
   const char* start = lexer->current - 1; // -1 because we've already consumed the first character
+  size_t length = 1;  // Start with 1 for the already consumed character
   
+  // Count the length of the identifier
   while (is_identifier_char(peek(lexer))) {
+    // Check for excessively long identifiers
+    if (length >= MAX_TOKEN_LENGTH - 1) {
+      return error_token(lexer, "Identifier too long");
+    }
+    
     advance(lexer);
+    length++;
   }
-  
-  size_t length = lexer->current - start;
   
   // Check if it's a keyword
   for (const keyword_t* k = keywords; k->keyword != NULL; k++) {
-    if (strlen(k->keyword) == length && strncmp(start, k->keyword, length) == 0) {
+    size_t keyword_len = strlen(k->keyword);
+    if (keyword_len == length && strncmp(start, k->keyword, length) == 0) {
       return make_token(lexer, k->type, start, length);
     }
   }
@@ -525,52 +831,112 @@ static token_t scan_identifier(lexer_t* lexer) {
  */
 static token_t scan_number(lexer_t* lexer) {
   const char* start = lexer->current - 1; // -1 because we've already consumed the first digit
+  size_t length = 1;  // Start with 1 for the already consumed digit
   
   // Check for hex or binary prefix
   if (start[0] == '0' && !is_at_end(lexer)) {
     if (peek(lexer) == 'x' || peek(lexer) == 'X') {
       // Hexadecimal
       advance(lexer);
+      length++;
+      
+      bool has_digits = false;
       while (isxdigit(peek(lexer))) {
         advance(lexer);
+        length++;
+        has_digits = true;
+        
+        // Check for excessive length
+        if (length >= MAX_TOKEN_LENGTH - 1) {
+          return error_token(lexer, "Number too long");
+        }
+      }
+      
+      if (!has_digits) {
+        return error_token(lexer, "Expected hexadecimal digits after '0x'");
       }
     } else if (peek(lexer) == 'b' || peek(lexer) == 'B') {
       // Binary
       advance(lexer);
+      length++;
+      
+      bool has_digits = false;
       while (peek(lexer) == '0' || peek(lexer) == '1' || peek(lexer) == '_') {
+        if (peek(lexer) == '_') {
+          // Skip underscore separators
+          advance(lexer);
+          continue;
+        }
+        
         advance(lexer);
+        length++;
+        has_digits = true;
+        
+        // Check for excessive length
+        if (length >= MAX_TOKEN_LENGTH - 1) {
+          return error_token(lexer, "Number too long");
+        }
+      }
+      
+      if (!has_digits) {
+        return error_token(lexer, "Expected binary digits after '0b'");
       }
     }
   } else {
     // Decimal or floating point
-    while (isdigit(peek(lexer))) {
-      advance(lexer);
-    }
+    bool has_decimal = false;
     
-    // Check for decimal point
-    if (peek(lexer) == '.' && isdigit(peek_next(lexer))) {
-      advance(lexer); // Consume the '.'
+    while (isdigit(peek(lexer)) || peek(lexer) == '_' || 
+           (peek(lexer) == '.' && !has_decimal && isdigit(peek_next(lexer)))) {
       
-      while (isdigit(peek(lexer))) {
+      if (peek(lexer) == '_') {
+        // Skip underscore separators
         advance(lexer);
+        continue;
+      }
+      
+      if (peek(lexer) == '.') {
+        has_decimal = true;
+      }
+      
+      advance(lexer);
+      length++;
+      
+      // Check for excessive length
+      if (length >= MAX_TOKEN_LENGTH - 1) {
+        return error_token(lexer, "Number too long");
       }
     }
     
     // Check for scientific notation
-    if ((peek(lexer) == 'e' || peek(lexer) == 'E')) {
+    if (peek(lexer) == 'e' || peek(lexer) == 'E') {
       advance(lexer);
+      length++;
       
       // Optional sign
       if (peek(lexer) == '+' || peek(lexer) == '-') {
         advance(lexer);
+        length++;
       }
       
       if (!isdigit(peek(lexer))) {
-        return error_token(lexer, "Invalid scientific notation");
+        return error_token(lexer, "Expected exponent digits after 'e'");
       }
       
-      while (isdigit(peek(lexer))) {
+      while (isdigit(peek(lexer)) || peek(lexer) == '_') {
+        if (peek(lexer) == '_') {
+          // Skip underscore separators
+          advance(lexer);
+          continue;
+        }
+        
         advance(lexer);
+        length++;
+        
+        // Check for excessive length
+        if (length >= MAX_TOKEN_LENGTH - 1) {
+          return error_token(lexer, "Number too long");
+        }
       }
     }
   }
@@ -580,7 +946,7 @@ static token_t scan_number(lexer_t* lexer) {
     return error_token(lexer, "Invalid number suffix");
   }
   
-  return make_token(lexer, TOKEN_NUMBER, start, lexer->current - start);
+  return make_token(lexer, TOKEN_NUMBER, start, length);
 }
 
 /**
@@ -591,12 +957,41 @@ static token_t scan_number(lexer_t* lexer) {
  */
 static token_t scan_string(lexer_t* lexer) {
   const char* start = lexer->current - 1; // -1 because we've already consumed the opening quote
+  size_t length = 1;  // Start with 1 for the opening quote
   
   while (peek(lexer) != '"' && !is_at_end(lexer)) {
-    if (peek(lexer) == '\\' && peek_next(lexer) == '"') {
-      advance(lexer); // Skip the backslash
+    if (peek(lexer) == '\n') {
+      return error_token(lexer, "Unterminated string (newline in string)");
     }
+    
+    if (peek(lexer) == '\\') {
+      advance(lexer); // Consume the backslash
+      length++;
+      
+      // Check for valid escape sequence
+      switch (peek(lexer)) {
+        case '"':
+        case '\\':
+        case 'n':
+        case 't':
+        case 'r':
+        case '0':
+          break;
+        default:
+          // Invalid escape sequence, but continue parsing
+          error_report_at(ERROR_LEXICAL, lexer->filename, lexer->line, lexer->column,
+                       "Invalid escape sequence '\\%c'", peek(lexer));
+          break;
+      }
+    }
+    
     advance(lexer);
+    length++;
+    
+    // Check for excessive string length
+    if (length >= MAX_TOKEN_LENGTH - 1) {
+      return error_token(lexer, "String too long");
+    }
   }
   
   if (is_at_end(lexer)) {
@@ -605,8 +1000,9 @@ static token_t scan_string(lexer_t* lexer) {
   
   // Consume the closing quote
   advance(lexer);
+  length++;
   
-  return make_token(lexer, TOKEN_STRING, start, lexer->current - start);
+  return make_token(lexer, TOKEN_STRING, start, length);
 }
 
 /**
@@ -671,9 +1067,20 @@ static token_t scan_token(lexer_t* lexer) {
  * @return The next token
  */
 token_t lexer_next_token(lexer_t* lexer) {
+  if (lexer == NULL) {
+    token_t error = token_create_error(0, 0, "Lexer is NULL");
+    return error;
+  }
+  
   if (lexer->has_peeked_token) {
     lexer->has_peeked_token = false;
-    return lexer->peeked_token;
+    token_t token = lexer->peeked_token;
+    
+    // Clear the peeked token without freeing its resources
+    // since they've been moved to the returned token
+    memset(&lexer->peeked_token, 0, sizeof(token_t));
+    
+    return token;
   }
   
   return scan_token(lexer);
@@ -686,13 +1093,22 @@ token_t lexer_next_token(lexer_t* lexer) {
  * @return The next token
  */
 token_t lexer_peek_token(lexer_t* lexer) {
+  if (lexer == NULL) {
+    token_t error = token_create_error(0, 0, "Lexer is NULL");
+    return error;
+  }
+  
   if (lexer->has_peeked_token) {
     return lexer->peeked_token;
   }
   
-  lexer->peeked_token = scan_token(lexer);
+  token_t token = scan_token(lexer);
+  
+  // Store a copy of the token
+  lexer->peeked_token = token_copy(&token);
   lexer->has_peeked_token = true;
-  return lexer->peeked_token;
+  
+  return token;
 }
 
 /**
@@ -702,7 +1118,7 @@ token_t lexer_peek_token(lexer_t* lexer) {
  * @return Current line number
  */
 size_t lexer_line(const lexer_t* lexer) {
-  return lexer->line;
+  return lexer ? lexer->line : 0;
 }
 
 /**
@@ -712,7 +1128,7 @@ size_t lexer_line(const lexer_t* lexer) {
  * @return Current column number
  */
 size_t lexer_column(const lexer_t* lexer) {
-  return lexer->column;
+  return lexer ? lexer->column : 0;
 }
 
 /**
@@ -722,5 +1138,15 @@ size_t lexer_column(const lexer_t* lexer) {
  * @return Source filename
  */
 const char* lexer_filename(const lexer_t* lexer) {
-  return lexer->filename;
+  return lexer ? lexer->filename : "<unknown>";
+}
+
+/**
+ * @brief Get if an error occurred during tokenization
+ * 
+ * @param lexer The lexer instance
+ * @return true if error occurred, false otherwise
+ */
+bool lexer_has_error(const lexer_t* lexer) {
+  return lexer ? lexer->has_error : true;
 }

@@ -26,7 +26,8 @@ typedef enum {
   ERROR_SYNTAX,                /**< Syntax error (parsing) */
   ERROR_SEMANTIC,              /**< Semantic error (type checking, etc.) */
   ERROR_CODEGEN,               /**< Code generation error */
-  ERROR_INTERNAL               /**< Internal compiler error */
+  ERROR_INTERNAL,              /**< Internal compiler error */
+  ERROR_SECURITY
 } error_code_t;
 
 /**

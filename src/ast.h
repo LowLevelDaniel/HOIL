@@ -69,11 +69,19 @@ typedef enum {
 } memory_space_t;
 
 /**
+ * @brief Reference counting for AST nodes
+ */
+typedef struct {
+  uint32_t count;      /**< Reference count */
+} ast_ref_count_t;
+
+/**
  * @brief Type definition structure
  */
 struct ast_type_t {
-  type_category_t category;     /**< Type category */
-  uint32_t qualifier_flags;     /**< Type qualifiers */
+  ast_ref_count_t ref_count;  /**< Reference count */
+  type_category_t category;   /**< Type category */
+  uint32_t qualifier_flags;   /**< Type qualifiers */
   
   union {
     // Integer type info
@@ -134,14 +142,15 @@ typedef struct {
  * @brief Type definition structure
  */
 struct ast_type_def_t {
-  const char* name;               /**< Type name */
-  ast_type_t type;                /**< Base type */
+  ast_ref_count_t ref_count;    /**< Reference count */
+  const char* name;             /**< Type name */
+  ast_type_t type;              /**< Base type */
   
   // For structure types
-  ast_struct_field_t* fields;     /**< Structure fields */
-  uint32_t field_count;           /**< Number of fields */
-  uint32_t size;                  /**< Total size in bytes */
-  uint32_t alignment;             /**< Alignment requirement in bytes */
+  ast_struct_field_t* fields;   /**< Structure fields */
+  uint32_t field_count;         /**< Number of fields */
+  uint32_t size;                /**< Total size in bytes */
+  uint32_t alignment;           /**< Alignment requirement in bytes */
 };
 
 /**
@@ -160,6 +169,7 @@ typedef enum {
  * @brief Constant value
  */
 struct ast_constant_t {
+  ast_ref_count_t ref_count;    /**< Reference count */
   const char* name;             /**< Constant name */
   ast_type_t* type;             /**< Constant type */
   constant_type_t value_type;   /**< Type of constant value */
@@ -184,6 +194,7 @@ struct ast_constant_t {
  * @brief Global variable
  */
 struct ast_global_t {
+  ast_ref_count_t ref_count;    /**< Reference count */
   const char* name;             /**< Global name */
   ast_type_t* type;             /**< Global type */
   bool has_initializer;         /**< Whether global has initializer */
@@ -202,26 +213,28 @@ typedef struct {
  * @brief Function definition or declaration
  */
 struct ast_function_t {
-  const char* name;               /**< Function name */
-  ast_type_t* return_type;        /**< Return type */
-  ast_parameter_t* parameters;    /**< Parameters */
-  uint32_t parameter_count;       /**< Number of parameters */
-  bool is_vararg;                 /**< Whether function has variable arguments */
-  bool is_extern;                 /**< Whether function is external */
-  ast_basic_block_t** blocks;     /**< Basic blocks (NULL if extern) */
-  uint32_t block_count;           /**< Number of blocks */
-  ast_target_t* target;           /**< Target-specific version (NULL if generic) */
+  ast_ref_count_t ref_count;    /**< Reference count */
+  const char* name;             /**< Function name */
+  ast_type_t* return_type;      /**< Return type */
+  ast_parameter_t* parameters;  /**< Parameters */
+  uint32_t parameter_count;     /**< Number of parameters */
+  bool is_vararg;               /**< Whether function has variable arguments */
+  bool is_extern;               /**< Whether function is external */
+  ast_basic_block_t** blocks;   /**< Basic blocks (NULL if extern) */
+  uint32_t block_count;         /**< Number of blocks */
+  ast_target_t* target;         /**< Target-specific version (NULL if generic) */
 };
 
 /**
  * @brief Target requirements
  */
 struct ast_target_t {
-  const char* device_class;       /**< Target device class */
+  ast_ref_count_t ref_count;    /**< Reference count */
+  const char* device_class;     /**< Target device class */
   const char** required_features; /**< Required features */
-  uint32_t required_count;        /**< Number of required features */
+  uint32_t required_count;      /**< Number of required features */
   const char** preferred_features;/**< Preferred features */
-  uint32_t preferred_count;       /**< Number of preferred features */
+  uint32_t preferred_count;     /**< Number of preferred features */
 };
 
 /**
@@ -301,6 +314,7 @@ typedef enum {
  * @brief Instruction operand
  */
 struct ast_operand_t {
+  ast_ref_count_t ref_count;  /**< Reference count */
   operand_type_t type;     /**< Operand type */
   ast_type_t* value_type;  /**< Type of the value */
   
@@ -318,6 +332,7 @@ struct ast_operand_t {
     // For constants
     struct {
       ast_constant_t* constant; /**< Constant value */
+      bool owns_constant;       /**< Whether we own the constant */
     } constant;
     
     // For function references
@@ -336,10 +351,11 @@ struct ast_operand_t {
  * @brief Instruction in the AST
  */
 struct ast_instruction_t {
-  opcode_t opcode;                 /**< Instruction opcode */
-  ast_operand_t* result;           /**< Result operand (NULL if no result) */
-  ast_operand_t** operands;        /**< Source operands */
-  uint32_t operand_count;          /**< Number of operands */
+  ast_ref_count_t ref_count;   /**< Reference count */
+  opcode_t opcode;             /**< Instruction opcode */
+  ast_operand_t* result;       /**< Result operand (NULL if no result) */
+  ast_operand_t** operands;    /**< Source operands */
+  uint32_t operand_count;      /**< Number of operands */
   
   // For CALL instructions
   struct {
@@ -364,27 +380,48 @@ struct ast_instruction_t {
  * @brief Basic block in a function
  */
 struct ast_basic_block_t {
-  const char* name;                /**< Block name */
-  ast_instruction_t** instructions;/**< Instructions in the block */
-  uint32_t instruction_count;      /**< Number of instructions */
-  bool is_entry;                   /**< Whether this is an entry block */
+  ast_ref_count_t ref_count;     /**< Reference count */
+  const char* name;              /**< Block name */
+  ast_instruction_t** instructions; /**< Instructions in the block */
+  uint32_t instruction_count;    /**< Number of instructions */
+  bool is_entry;                 /**< Whether this is an entry block */
 };
 
 /**
  * @brief Module structure (top-level container)
  */
 struct ast_module_t {
-  const char* name;                /**< Module name */
-  ast_type_def_t** types;          /**< Type definitions */
-  uint32_t type_count;             /**< Number of type definitions */
-  ast_global_t** globals;          /**< Global variables */
-  uint32_t global_count;           /**< Number of global variables */
-  ast_constant_t** constants;      /**< Constants */
-  uint32_t constant_count;         /**< Number of constants */
-  ast_function_t** functions;      /**< Functions */
-  uint32_t function_count;         /**< Number of functions */
-  ast_target_t* target;            /**< Target requirements */
+  ast_ref_count_t ref_count;     /**< Reference count */
+  const char* name;              /**< Module name */
+  ast_type_def_t** types;        /**< Type definitions */
+  uint32_t type_count;           /**< Number of type definitions */
+  ast_global_t** globals;        /**< Global variables */
+  uint32_t global_count;         /**< Number of global variables */
+  ast_constant_t** constants;    /**< Constants */
+  uint32_t constant_count;       /**< Number of constants */
+  ast_function_t** functions;    /**< Functions */
+  uint32_t function_count;       /**< Number of functions */
+  ast_target_t* target;          /**< Target requirements */
 };
+
+/**
+ * @brief Reference counting functions
+ */
+
+/**
+ * @brief Increment reference count for a node
+ * 
+ * @param ref_count Reference count to increment
+ */
+void ast_ref_count_inc(ast_ref_count_t* ref_count);
+
+/**
+ * @brief Decrement reference count for a node
+ * 
+ * @param ref_count Reference count to decrement
+ * @return New reference count
+ */
+uint32_t ast_ref_count_dec(ast_ref_count_t* ref_count);
 
 /**
  * @brief Create a new empty module
@@ -393,6 +430,21 @@ struct ast_module_t {
  * @return New module or NULL on error
  */
 ast_module_t* ast_module_create(const char* name);
+
+/**
+ * @brief Add a reference to a module
+ * 
+ * @param module Module to reference
+ * @return The same module
+ */
+ast_module_t* ast_module_ref(ast_module_t* module);
+
+/**
+ * @brief Remove a reference to a module
+ * 
+ * @param module Module to dereference
+ */
+void ast_module_unref(ast_module_t* module);
 
 /**
  * @brief Destroy a module and all its contents
@@ -411,12 +463,42 @@ void ast_module_destroy(ast_module_t* module);
 ast_type_def_t* ast_type_def_create(const char* name, type_category_t category);
 
 /**
+ * @brief Add a reference to a type definition
+ * 
+ * @param type_def Type definition to reference
+ * @return The same type definition
+ */
+ast_type_def_t* ast_type_def_ref(ast_type_def_t* type_def);
+
+/**
+ * @brief Remove a reference to a type definition
+ * 
+ * @param type_def Type definition to dereference
+ */
+void ast_type_def_unref(ast_type_def_t* type_def);
+
+/**
  * @brief Create a new basic type
  * 
  * @param category Type category
  * @return New type or NULL on error
  */
 ast_type_t* ast_type_create(type_category_t category);
+
+/**
+ * @brief Add a reference to a type
+ * 
+ * @param type Type to reference
+ * @return The same type
+ */
+ast_type_t* ast_type_ref(ast_type_t* type);
+
+/**
+ * @brief Remove a reference to a type
+ * 
+ * @param type Type to dereference
+ */
+void ast_type_unref(ast_type_t* type);
 
 /**
  * @brief Create a new integer type
@@ -484,6 +566,14 @@ ast_type_t* ast_type_create_function(ast_type_t* return_type, ast_type_t** param
                                     uint32_t param_count, bool is_vararg);
 
 /**
+ * @brief Clone a type (deep copy)
+ * 
+ * @param type Type to clone
+ * @return Cloned type or NULL on error
+ */
+ast_type_t* ast_type_clone(const ast_type_t* type);
+
+/**
  * @brief Destroy a type
  * 
  * @param type Type to destroy
@@ -500,6 +590,29 @@ void ast_type_destroy(ast_type_t* type);
 ast_constant_t* ast_constant_create(const char* name, ast_type_t* type);
 
 /**
+ * @brief Add a reference to a constant
+ * 
+ * @param constant Constant to reference
+ * @return The same constant
+ */
+ast_constant_t* ast_constant_ref(ast_constant_t* constant);
+
+/**
+ * @brief Remove a reference to a constant
+ * 
+ * @param constant Constant to dereference
+ */
+void ast_constant_unref(ast_constant_t* constant);
+
+/**
+ * @brief Clone a constant (deep copy)
+ * 
+ * @param constant Constant to clone
+ * @return Cloned constant or NULL on error
+ */
+ast_constant_t* ast_constant_clone(const ast_constant_t* constant);
+
+/**
  * @brief Destroy a constant
  * 
  * @param constant Constant to destroy
@@ -514,6 +627,21 @@ void ast_constant_destroy(ast_constant_t* constant);
  * @return New global or NULL on error
  */
 ast_global_t* ast_global_create(const char* name, ast_type_t* type);
+
+/**
+ * @brief Add a reference to a global variable
+ * 
+ * @param global Global to reference
+ * @return The same global
+ */
+ast_global_t* ast_global_ref(ast_global_t* global);
+
+/**
+ * @brief Remove a reference to a global variable
+ * 
+ * @param global Global to dereference
+ */
+void ast_global_unref(ast_global_t* global);
 
 /**
  * @brief Destroy a global variable
@@ -533,6 +661,21 @@ void ast_global_destroy(ast_global_t* global);
 ast_function_t* ast_function_create(const char* name, ast_type_t* return_type, bool is_extern);
 
 /**
+ * @brief Add a reference to a function
+ * 
+ * @param function Function to reference
+ * @return The same function
+ */
+ast_function_t* ast_function_ref(ast_function_t* function);
+
+/**
+ * @brief Remove a reference to a function
+ * 
+ * @param function Function to dereference
+ */
+void ast_function_unref(ast_function_t* function);
+
+/**
  * @brief Destroy a function
  * 
  * @param function Function to destroy
@@ -549,6 +692,21 @@ void ast_function_destroy(ast_function_t* function);
 ast_basic_block_t* ast_basic_block_create(const char* name, bool is_entry);
 
 /**
+ * @brief Add a reference to a basic block
+ * 
+ * @param block Basic block to reference
+ * @return The same basic block
+ */
+ast_basic_block_t* ast_basic_block_ref(ast_basic_block_t* block);
+
+/**
+ * @brief Remove a reference to a basic block
+ * 
+ * @param block Basic block to dereference
+ */
+void ast_basic_block_unref(ast_basic_block_t* block);
+
+/**
  * @brief Destroy a basic block
  * 
  * @param block Basic block to destroy
@@ -562,6 +720,21 @@ void ast_basic_block_destroy(ast_basic_block_t* block);
  * @return New instruction or NULL on error
  */
 ast_instruction_t* ast_instruction_create(opcode_t opcode);
+
+/**
+ * @brief Add a reference to an instruction
+ * 
+ * @param instruction Instruction to reference
+ * @return The same instruction
+ */
+ast_instruction_t* ast_instruction_ref(ast_instruction_t* instruction);
+
+/**
+ * @brief Remove a reference to an instruction
+ * 
+ * @param instruction Instruction to dereference
+ */
+void ast_instruction_unref(ast_instruction_t* instruction);
 
 /**
  * @brief Set instruction result
@@ -598,6 +771,21 @@ void ast_instruction_destroy(ast_instruction_t* instruction);
 ast_operand_t* ast_operand_create(operand_type_t type, ast_type_t* value_type);
 
 /**
+ * @brief Add a reference to an operand
+ * 
+ * @param operand Operand to reference
+ * @return The same operand
+ */
+ast_operand_t* ast_operand_ref(ast_operand_t* operand);
+
+/**
+ * @brief Remove a reference to an operand
+ * 
+ * @param operand Operand to dereference
+ */
+void ast_operand_unref(ast_operand_t* operand);
+
+/**
  * @brief Create a local variable operand
  * 
  * @param name Variable name
@@ -619,9 +807,10 @@ ast_operand_t* ast_operand_create_global(const char* name, ast_type_t* type);
  * @brief Create a constant operand
  * 
  * @param constant Constant value
+ * @param take_ownership Whether to take ownership of the constant
  * @return New operand or NULL on error
  */
-ast_operand_t* ast_operand_create_constant(ast_constant_t* constant);
+ast_operand_t* ast_operand_create_constant(ast_constant_t* constant, bool take_ownership);
 
 /**
  * @brief Create a function reference operand
@@ -654,6 +843,21 @@ void ast_operand_destroy(ast_operand_t* operand);
  * @return New target or NULL on error
  */
 ast_target_t* ast_target_create(const char* device_class);
+
+/**
+ * @brief Add a reference to a target
+ * 
+ * @param target Target to reference
+ * @return The same target
+ */
+ast_target_t* ast_target_ref(ast_target_t* target);
+
+/**
+ * @brief Remove a reference to a target
+ * 
+ * @param target Target to dereference
+ */
+void ast_target_unref(ast_target_t* target);
 
 /**
  * @brief Add required feature to target

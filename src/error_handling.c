@@ -56,6 +56,7 @@ static const char* error_code_to_string(error_code_t code) {
     case ERROR_SEMANTIC: return "Semantic error";
     case ERROR_CODEGEN: return "Code generation error";
     case ERROR_INTERNAL: return "Internal compiler error";
+    case ERROR_SECURITY: return "Security Violation";
     default: return "Unknown error";
   }
 }

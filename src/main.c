@@ -14,10 +14,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <limits.h>
+
 #include "lexer.h"
 #include "parser.h"
 #include "coil_binary.h"
 #include "error_handling.h"
+#include "common.h"
+
+/**
+ * @brief Maximum file size limit to prevent memory exhaustion
+ */
+#define MAX_FILE_SIZE (100 * 1024 * 1024)  // 100MB
 
 /**
  * @brief Print usage information
@@ -31,6 +41,7 @@ static void print_usage(const char* program_name) {
   fprintf(stderr, "  -v, --verbose     Enable verbose output\n");
   fprintf(stderr, "  -d, --debug       Enable debug information\n");
   fprintf(stderr, "  -o <file>         Specify output file\n");
+  fprintf(stderr, "  --max-size <bytes> Maximum input file size (default: %d bytes)\n", MAX_FILE_SIZE);
 }
 
 /**
@@ -41,6 +52,7 @@ typedef struct {
   bool debug;
   char* input_file;
   char* output_file;
+  size_t max_file_size;
 } options_t;
 
 /**
@@ -61,6 +73,7 @@ static bool parse_args(int argc, char** argv, options_t* opts) {
   opts->debug = false;
   opts->input_file = NULL;
   opts->output_file = NULL;
+  opts->max_file_size = MAX_FILE_SIZE;
 
   // Parse arguments
   for (int i = 1; i < argc; i++) {
@@ -75,6 +88,33 @@ static bool parse_args(int argc, char** argv, options_t* opts) {
         opts->output_file = argv[++i];
       } else {
         fprintf(stderr, "Error: -o option requires an argument\n");
+        return false;
+      }
+    } else if (strcmp(argv[i], "--max-size") == 0) {
+      if (i + 1 < argc) {
+        // Parse size with overflow checking
+        char* endptr;
+        unsigned long size = strtoul(argv[i + 1], &endptr, 10);
+        
+        if (*endptr != '\0' || endptr == argv[i + 1]) {
+          fprintf(stderr, "Error: Invalid max size: %s\n", argv[i + 1]);
+          return false;
+        }
+        
+        if (size == ULONG_MAX && errno == ERANGE) {
+          fprintf(stderr, "Error: Max size value too large\n");
+          return false;
+        }
+        
+        if (size > SIZE_MAX) {
+          fprintf(stderr, "Error: Max size exceeds platform limit\n");
+          return false;
+        }
+        
+        opts->max_file_size = (size_t)size;
+        i++;
+      } else {
+        fprintf(stderr, "Error: --max-size option requires an argument\n");
         return false;
       }
     } else if (opts->input_file == NULL) {
@@ -95,21 +135,10 @@ static bool parse_args(int argc, char** argv, options_t* opts) {
 
   // If output file not specified, derive from input file
   if (opts->output_file == NULL) {
-    size_t input_len = strlen(opts->input_file);
-    opts->output_file = malloc(input_len + 2); // +2 for potential extra char and null terminator
+    opts->output_file = replace_extension(opts->input_file, "coil");
     if (opts->output_file == NULL) {
-      fprintf(stderr, "Error: Memory allocation failed\n");
+      fprintf(stderr, "Error: Failed to create output filename\n");
       return false;
-    }
-    
-    strncpy(opts->output_file, opts->input_file, input_len + 1);
-    
-    // Replace extension or append .coil
-    char* ext = strrchr(opts->output_file, '.');
-    if (ext != NULL) {
-      strcpy(ext, ".coil");
-    } else {
-      strcat(opts->output_file, ".coil");
     }
   }
 
@@ -117,73 +146,265 @@ static bool parse_args(int argc, char** argv, options_t* opts) {
 }
 
 /**
- * @brief Read entire file into memory
+ * @brief Validate a file path for security
  * 
- * @param filename File to read
- * @param buffer Pointer to buffer that will be allocated
- * @param size Pointer to store the size of the read file
- * @return true if successful, false otherwise
+ * @param path File path to validate
+ * @return true if valid, false otherwise
  */
-static bool read_file(const char* filename, char** buffer, size_t* size) {
+static bool validate_file_path(const char* path) {
+  if (path == NULL) {
+    fprintf(stderr, "Error: File path is NULL\n");
+    return false;
+  }
+  
+  // Check for directory traversal attempts
+  if (strstr(path, "../") != NULL || strstr(path, "..\\") != NULL) {
+    fprintf(stderr, "Error: File path contains directory traversal\n");
+    return false;
+  }
+  
+  // Check for absolute paths
+  #ifdef _WIN32
+  if (path[0] == '/' || path[0] == '\\' || 
+      (isalpha(path[0]) && path[1] == ':' && (path[2] == '/' || path[2] == '\\'))) {
+    // Allow but warn about absolute paths
+    fprintf(stderr, "Warning: Using absolute path: %s\n", path);
+  }
+  #else
+  if (path[0] == '/') {
+    // Allow but warn about absolute paths
+    fprintf(stderr, "Warning: Using absolute path: %s\n", path);
+  }
+  #endif
+  
+  return true;
+}
+
+/**
+ * @brief Check if a file exists and is readable
+ * 
+ * @param filename File to check
+ * @return true if file exists and is readable, false otherwise
+ */
+static bool file_exists(const char* filename) {
+  if (filename == NULL) {
+    return false;
+  }
+  
   FILE* file = fopen(filename, "rb");
   if (file == NULL) {
-    fprintf(stderr, "Error: Cannot open file %s\n", filename);
     return false;
   }
-
-  // Get file size
-  fseek(file, 0, SEEK_END);
-  *size = ftell(file);
-  fseek(file, 0, SEEK_SET);
-
-  // Allocate buffer
-  *buffer = (char*)malloc(*size + 1); // +1 for null terminator
-  if (*buffer == NULL) {
-    fprintf(stderr, "Error: Memory allocation failed\n");
-    fclose(file);
-    return false;
-  }
-
-  // Read file content
-  size_t read_size = fread(*buffer, 1, *size, file);
-  if (read_size != *size) {
-    fprintf(stderr, "Error: Failed to read file %s\n", filename);
-    free(*buffer);
-    fclose(file);
-    return false;
-  }
-
-  // Add null terminator
-  (*buffer)[*size] = '\0';
-
+  
   fclose(file);
   return true;
 }
 
 /**
- * @brief Write binary data to file
+ * @brief Get file size in bytes
+ * 
+ * @param filename File to check
+ * @param size Pointer to store the size
+ * @return true if successful, false otherwise
+ */
+static bool get_file_size(const char* filename, size_t* size) {
+  if (filename == NULL || size == NULL) {
+    return false;
+  }
+  
+  struct stat st;
+  if (stat(filename, &st) != 0) {
+    return false;
+  }
+  
+  *size = (size_t)st.st_size;
+  return true;
+}
+
+/**
+ * @brief Read entire file into memory with security checks
+ * 
+ * @param filename File to read
+ * @param buffer Pointer to buffer that will be allocated
+ * @param size Pointer to store the size of the read file
+ * @param max_size Maximum file size allowed
+ * @return true if successful, false otherwise
+ */
+static bool read_file_secure(const char* filename, char** buffer, size_t* size, size_t max_size) {
+  if (filename == NULL || buffer == NULL || size == NULL) {
+    error_report(ERROR_INVALID_ARGUMENT, "Invalid arguments to read_file_secure");
+    return false;
+  }
+  
+  // Validate path
+  if (!validate_file_path(filename)) {
+    error_report(ERROR_SECURITY, "Invalid file path: %s", filename);
+    return false;
+  }
+  
+  // Sanitize path
+  char* sanitized_path = sanitize_path(filename);
+  if (sanitized_path == NULL) {
+    error_report(ERROR_MEMORY, "Failed to sanitize file path");
+    return false;
+  }
+  
+  // Check file size
+  size_t file_size;
+  if (!get_file_size(sanitized_path, &file_size)) {
+    error_report(ERROR_IO, "Cannot determine size of file: %s", sanitized_path);
+    free(sanitized_path);
+    return false;
+  }
+  
+  // Check against maximum size
+  if (file_size > max_size) {
+    error_report(ERROR_IO, "File too large: %zu bytes (maximum: %zu)", file_size, max_size);
+    free(sanitized_path);
+    return false;
+  }
+  
+  // Check for empty file
+  if (file_size == 0) {
+    error_report(ERROR_IO, "File is empty: %s", sanitized_path);
+    free(sanitized_path);
+    return false;
+  }
+  
+  FILE* file = fopen(sanitized_path, "rb");
+  if (file == NULL) {
+    error_report(ERROR_IO, "Cannot open file: %s (error: %s)", 
+                sanitized_path, strerror(errno));
+    free(sanitized_path);
+    return false;
+  }
+  
+  // Allocate buffer
+  *buffer = (char*)safe_malloc(file_size + 1); // +1 for null terminator
+  if (*buffer == NULL) {
+    error_report(ERROR_MEMORY, "Failed to allocate memory for file contents");
+    fclose(file);
+    free(sanitized_path);
+    return false;
+  }
+
+  // Read file content
+  size_t read_size = fread(*buffer, 1, file_size, file);
+  if (read_size != file_size) {
+    error_report(ERROR_IO, "Failed to read file %s (read %zu of %zu bytes)", 
+                sanitized_path, read_size, file_size);
+    free(*buffer);
+    *buffer = NULL;
+    fclose(file);
+    free(sanitized_path);
+    return false;
+  }
+
+  // Add null terminator
+  (*buffer)[file_size] = '\0';
+  *size = file_size;
+
+  fclose(file);
+  free(sanitized_path);
+  return true;
+}
+
+/**
+ * @brief Write binary data to file with security checks
  * 
  * @param filename File to write
  * @param data Data to write
  * @param size Size of data in bytes
  * @return true if successful, false otherwise
  */
-static bool write_file(const char* filename, const void* data, size_t size) {
-  FILE* file = fopen(filename, "wb");
+static bool write_file_secure(const char* filename, const void* data, size_t size) {
+  if (filename == NULL || data == NULL) {
+    error_report(ERROR_INVALID_ARGUMENT, "Invalid arguments to write_file_secure");
+    return false;
+  }
+  
+  // Validate path
+  if (!validate_file_path(filename)) {
+    error_report(ERROR_SECURITY, "Invalid file path: %s", filename);
+    return false;
+  }
+  
+  // Sanitize path
+  char* sanitized_path = sanitize_path(filename);
+  if (sanitized_path == NULL) {
+    error_report(ERROR_MEMORY, "Failed to sanitize file path");
+    return false;
+  }
+  
+  // Open file for writing
+  FILE* file = fopen(sanitized_path, "wb");
   if (file == NULL) {
-    fprintf(stderr, "Error: Cannot open file %s for writing\n", filename);
+    error_report(ERROR_IO, "Cannot open file for writing: %s (error: %s)", 
+                sanitized_path, strerror(errno));
+    free(sanitized_path);
     return false;
   }
 
+  // Write data
   size_t written = fwrite(data, 1, size, file);
   if (written != size) {
-    fprintf(stderr, "Error: Failed to write to file %s\n", filename);
+    error_report(ERROR_IO, "Failed to write to file %s (wrote %zu of %zu bytes)", 
+                sanitized_path, written, size);
     fclose(file);
+    free(sanitized_path);
     return false;
   }
 
+  // Ensure data is flushed to disk
+  if (fflush(file) != 0) {
+    error_report(ERROR_IO, "Failed to flush data to file: %s", sanitized_path);
+    fclose(file);
+    free(sanitized_path);
+    return false;
+  }
+  
   fclose(file);
+  free(sanitized_path);
   return true;
+}
+
+/**
+ * @brief Clean up resources
+ * 
+ * @param source Source buffer to free
+ * @param output_file Output filename to free if auto-generated
+ * @param module AST module to free
+ * @param parser Parser to free
+ * @param lexer Lexer to free
+ * @param binary COIL binary to free
+ */
+static void cleanup_resources(char* source, char* output_file, 
+                             ast_module_t* module, parser_t* parser, 
+                             lexer_t* lexer, coil_binary_t* binary) {
+  // Free resources in reverse order of creation
+  if (binary != NULL) {
+    coil_binary_destroy(binary);
+  }
+  
+  if (module != NULL) {
+    ast_module_destroy(module);
+  }
+  
+  if (parser != NULL) {
+    parser_destroy(parser);
+  }
+  
+  if (lexer != NULL) {
+    lexer_destroy(lexer);
+  }
+  
+  if (source != NULL) {
+    free(source);
+  }
+  
+  if (output_file != NULL) {
+    free(output_file);
+  }
 }
 
 /**
@@ -195,11 +416,28 @@ static bool write_file(const char* filename, const void* data, size_t size) {
  */
 int main(int argc, char** argv) {
   options_t opts;
+  char* auto_output_filename = NULL;
   
   // Parse command-line arguments
   if (!parse_args(argc, argv, &opts)) {
     print_usage(argv[0]);
     return EXIT_FAILURE;
+  }
+
+  // Store auto-generated output filename for cleanup
+  if (opts.output_file != NULL && !file_exists(opts.output_file)) {
+    // Check if it's one of the original arguments
+    bool is_arg = false;
+    for (int i = 1; i < argc; i++) {
+      if (argv[i] == opts.output_file) {
+        is_arg = true;
+        break;
+      }
+    }
+    
+    if (!is_arg) {
+      auto_output_filename = opts.output_file;
+    }
   }
 
   // Initialize error handling
@@ -208,12 +446,23 @@ int main(int argc, char** argv) {
   if (opts.verbose) {
     printf("Input file: %s\n", opts.input_file);
     printf("Output file: %s\n", opts.output_file);
+    printf("Maximum file size: %zu bytes\n", opts.max_file_size);
   }
 
-  // Read input file
+  // Resources to clean up
   char* source = NULL;
+  lexer_t* lexer = NULL;
+  parser_t* parser = NULL;
+  ast_module_t* module = NULL;
+  coil_binary_t* binary = NULL;
+  
+  // Register cleanup function
+  error_register_cleanup((void (*)(void*))cleanup_resources, &source);
+
+  // Read input file
   size_t source_size = 0;
-  if (!read_file(opts.input_file, &source, &source_size)) {
+  if (!read_file_secure(opts.input_file, &source, &source_size, opts.max_file_size)) {
+    cleanup_resources(NULL, auto_output_filename, NULL, NULL, NULL, NULL);
     return EXIT_FAILURE;
   }
 
@@ -222,29 +471,30 @@ int main(int argc, char** argv) {
   }
 
   // Initialize lexer
-  lexer_t* lexer = lexer_create(source, source_size, opts.input_file);
+  lexer = lexer_create(source, source_size, opts.input_file);
   if (lexer == NULL) {
     fprintf(stderr, "Error: Failed to initialize lexer\n");
-    free(source);
+    cleanup_resources(source, auto_output_filename, NULL, NULL, NULL, NULL);
     return EXIT_FAILURE;
   }
 
   // Initialize parser
-  parser_t* parser = parser_create(lexer);
+  parser = parser_create(lexer);
   if (parser == NULL) {
     fprintf(stderr, "Error: Failed to initialize parser\n");
-    lexer_destroy(lexer);
-    free(source);
+    cleanup_resources(source, auto_output_filename, NULL, NULL, lexer, NULL);
     return EXIT_FAILURE;
   }
 
   // Parse the input file
-  ast_module_t* module = parser_parse_module(parser);
-  if (module == NULL) {
+  error_reset();  // Reset error state before parsing
+  module = parser_parse_module(parser);
+  if (module == NULL || error_occurred()) {
     fprintf(stderr, "Error: Parsing failed\n");
-    parser_destroy(parser);
-    lexer_destroy(lexer);
-    free(source);
+    if (error_last_message() != NULL) {
+      fprintf(stderr, "%s\n", error_last_message());
+    }
+    cleanup_resources(source, auto_output_filename, module, parser, lexer, NULL);
     return EXIT_FAILURE;
   }
 
@@ -253,13 +503,13 @@ int main(int argc, char** argv) {
   }
 
   // Generate COIL binary
-  coil_binary_t* binary = coil_binary_generate(module);
+  binary = coil_binary_generate(module);
   if (binary == NULL) {
     fprintf(stderr, "Error: COIL binary generation failed\n");
-    ast_module_destroy(module);
-    parser_destroy(parser);
-    lexer_destroy(lexer);
-    free(source);
+    if (error_last_message() != NULL) {
+      fprintf(stderr, "%s\n", error_last_message());
+    }
+    cleanup_resources(source, auto_output_filename, module, parser, lexer, NULL);
     return EXIT_FAILURE;
   }
 
@@ -268,12 +518,12 @@ int main(int argc, char** argv) {
   }
 
   // Write output file
-  if (!write_file(opts.output_file, binary->data, binary->size)) {
-    coil_binary_destroy(binary);
-    ast_module_destroy(module);
-    parser_destroy(parser);
-    lexer_destroy(lexer);
-    free(source);
+  if (!write_file_secure(opts.output_file, binary->data, binary->size)) {
+    fprintf(stderr, "Error: Failed to write output file\n");
+    if (error_last_message() != NULL) {
+      fprintf(stderr, "%s\n", error_last_message());
+    }
+    cleanup_resources(source, auto_output_filename, module, parser, lexer, binary);
     return EXIT_FAILURE;
   }
 
@@ -282,17 +532,10 @@ int main(int argc, char** argv) {
   }
 
   // Clean up
-  coil_binary_destroy(binary);
-  ast_module_destroy(module);
-  parser_destroy(parser);
-  lexer_destroy(lexer);
+  cleanup_resources(source, auto_output_filename, module, parser, lexer, binary);
   
-  // Free allocated output filename if it was auto-generated
-  if (opts.output_file != NULL && opts.output_file != argv[argc-1]) {
-    free(opts.output_file);
-  }
-  
-  free(source);
+  // Final cleanup
+  error_cleanup();
   
   return EXIT_SUCCESS;
 }
