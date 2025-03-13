@@ -1,0 +1,41 @@
+// Module declaration
+MODULE "example";
+
+// Type definitions (none required for this example)
+
+// Constant declarations
+CONSTANT PI: f64 = 3.14159265359;
+
+// Global variables
+GLOBAL counter: i32 = 0;
+
+// Function to calculate the greatest common divisor
+FUNCTION gcd(a: i32, b: i32) -> i32 {
+  ENTRY:
+    is_b_zero = CMP_EQ b, 0;
+    BR is_b_zero, DONE, LOOP;
+      
+  LOOP:
+    remainder = REM a, b;
+    a = b;
+    b = remainder;
+    is_b_zero = CMP_EQ b, 0;
+    BR is_b_zero, DONE, LOOP;
+      
+  DONE:
+    RET a;
+}
+
+// Main function
+FUNCTION main() -> i32 {
+  ENTRY:
+    // Update global counter
+    old_count = LOAD counter;
+    new_count = ADD old_count, 1;
+    STORE counter, new_count;
+    
+    // Calculate GCD of 48 and 18
+    result = CALL gcd(48, 18);
+    
+    RET result;
+}
